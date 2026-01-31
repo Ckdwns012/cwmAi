@@ -45,8 +45,8 @@ Desktop.ini
 logs/
 
 # Application specific
-# uploads/
-# !uploads/.gitkeep
+uploads/
+!uploads/.gitkeep
 
 # Temporary files
 *.tmp
