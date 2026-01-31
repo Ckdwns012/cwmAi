@@ -1,0 +1,342 @@
+<!DOCTYPE html>
+<html lang="ko" xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>회원가입</title>
+    <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: #f4f4f4;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            padding: 20px;
+        }
+        
+        .signup-container {
+            background-color: #fff;
+            border-radius: 12px;
+            box-shadow: 0 0 20px rgba(0, 0, 0, 0.1);
+            padding: 40px;
+            width: 100%;
+            max-width: 500px;
+        }
+        
+        .logo-container {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        
+        .logo-container img {
+            width: 200px;
+            height: 70px;
+            object-fit: contain;
+        }
+        
+        h2 {
+            text-align: center;
+            color: #333;
+            margin-bottom: 30px;
+            font-size: 28px;
+            font-weight: 700;
+        }
+        
+        .message {
+            color: #dc3545;
+            text-align: center;
+            margin-bottom: 20px;
+            padding: 12px;
+            background-color: #f8d7da;
+            border-radius: 8px;
+            border: 1px solid #f5c6cb;
+        }
+        
+        .form-group {
+            margin-bottom: 20px;
+        }
+        
+        label {
+            display: block;
+            margin-bottom: 8px;
+            color: #333;
+            font-weight: 500;
+            font-size: 14px;
+        }
+        
+        input[type="text"],
+        input[type="password"],
+        input[type="email"] {
+            width: 100%;
+            padding: 12px 16px;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            font-size: 16px;
+            transition: border-color 0.3s ease;
+        }
+        
+        input[type="text"]:focus,
+        input[type="password"]:focus,
+        input[type="email"]:focus {
+            outline: none;
+            border-color: #007bff;
+            box-shadow: 0 0 0 3px rgba(0, 123, 255, 0.1);
+        }
+        
+        .id-check-group {
+            display: flex;
+            gap: 10px;
+            align-items: flex-end;
+        }
+        
+        .id-check-group input {
+            flex: 1;
+        }
+        
+        .id-check-group button {
+            padding: 12px 20px;
+            background-color: #6c757d;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            white-space: nowrap;
+            transition: all 0.3s ease;
+        }
+        
+        .id-check-group button:hover {
+            background-color: #5a6268;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 8px rgba(108, 117, 125, 0.3);
+        }
+        
+        .id-check-msg {
+            margin-top: 8px;
+            font-size: 14px;
+            font-weight: 500;
+        }
+        
+        .id-check-msg.success {
+            color: #28a745;
+        }
+        
+        .id-check-msg.error {
+            color: #dc3545;
+        }
+        
+        .button-group {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            margin-top: 30px;
+        }
+        
+        button[type="submit"] {
+            width: 100%;
+            padding: 14px;
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            background-color: #007bff;
+            color: white;
+        }
+        
+        button[type="submit"]:hover:not(:disabled) {
+            background-color: #0056b3;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 8px rgba(0, 123, 255, 0.3);
+        }
+        
+        button[type="submit"]:disabled {
+            background-color: #6c757d;
+            cursor: not-allowed;
+            opacity: 0.6;
+        }
+        
+        .login-link {
+            text-align: center;
+            margin-top: 20px;
+            color: #666;
+            font-size: 14px;
+        }
+        
+        .login-link a {
+            color: #007bff;
+            text-decoration: none;
+            font-weight: 600;
+        }
+        
+        .login-link a:hover {
+            text-decoration: underline;
+        }
+    </style>
+</head>
+<body>
+    <div class="signup-container">
+        <div class="logo-container">
+            <img src="/images/cwmAi.png" alt="CWM AI" onerror="this.style.display='none';">
+        </div>
+        
+        <h2>회원가입</h2>
+        
+        <!-- 메시지 출력 -->
+        <p id="message" class="message" th:if="${message != null}" th:text="${message}"></p>
+        
+        <form id="signUpForm" action="/signIn" method="post">
+            <div class="form-group">
+                <div class="id-check-group">
+                    <input type="text" name="id" id="id" placeholder="아이디를 입력하세요" required>
+                    <button type="button" onclick="checkId()">중복체크</button>
+                </div>
+                <span id="idCheckMsg" class="id-check-msg"></span>
+            </div>
+            
+            <div class="form-group">
+                <input type="password" name="password" id="password" placeholder="비밀번호를 입력하세요" required>
+            </div>
+            
+            <div class="form-group">
+                <input type="password" id="passwordConfirm" placeholder="비밀번호를 다시 입력하세요" required>
+                <span id="passwordCheckMsg" class="id-check-msg"></span>
+            </div>
+            
+            <div class="form-group">
+                <input type="text" name="name" placeholder="이름을 입력하세요" required>
+            </div>
+            
+            <div class="form-group">
+                <input type="email" name="email" placeholder="이메일을 입력하세요" required>
+            </div>
+            
+            <div class="button-group">
+                <button type="submit" id="submitBtn" disabled>회원가입</button>
+            </div>
+        </form>
+        
+        <div class="login-link">
+            이미 계정이 있으신가요? <a th:href="@{/loginPage}">로그인</a>
+        </div>
+    </div>
+    
+    <script>
+        let idAvailable = false;
+        let checkedId = ""; // 마지막으로 체크한 ID 저장
+        
+        function checkId() {
+            const id = document.getElementById('id').value;
+            const idCheckMsg = document.getElementById('idCheckMsg');
+            
+            if (!id) {
+                alert("ID를 입력해주세요.");
+                return;
+            }
+            
+            idCheckMsg.textContent = "확인 중...";
+            idCheckMsg.className = "id-check-msg";
+            
+            axios.get('/checkId', { params: { id: id } })
+                .then(response => {
+                    if (response.data === 'success') {
+                        idCheckMsg.textContent = "사용 가능한 ID입니다.";
+                        idCheckMsg.className = "id-check-msg success";
+                        idAvailable = true;
+                        checkedId = id; // 체크한 ID 저장
+                        updateSubmitButton();
+                    } else {
+                        idCheckMsg.textContent = "이미 사용중인 ID입니다.";
+                        idCheckMsg.className = "id-check-msg error";
+                        idAvailable = false;
+                        checkedId = ""; // 체크 무효화
+                        document.getElementById('submitBtn').disabled = true;
+                    }
+                })
+                .catch(error => {
+                    console.error(error);
+                    idCheckMsg.textContent = "ID 확인 중 오류 발생";
+                    idCheckMsg.className = "id-check-msg error";
+                    idAvailable = false;
+                    checkedId = "";
+                    document.getElementById('submitBtn').disabled = true;
+                });
+        }
+        
+        // ID 입력 필드 변경 시 체크 상태 초기화
+        document.getElementById('id').addEventListener('input', function() {
+            if (this.value !== checkedId) {
+                idAvailable = false;
+                document.getElementById('idCheckMsg').textContent = "";
+                document.getElementById('idCheckMsg').className = "id-check-msg";
+                updateSubmitButton();
+            }
+        });
+        
+        // 비밀번호 확인 검증
+        let passwordMatch = false;
+        const passwordInput = document.getElementById('password');
+        const passwordConfirmInput = document.getElementById('passwordConfirm');
+        const passwordCheckMsg = document.getElementById('passwordCheckMsg');
+        
+        function checkPasswordMatch() {
+            const password = passwordInput.value;
+            const passwordConfirm = passwordConfirmInput.value;
+            
+            if (passwordConfirm.length === 0) {
+                passwordCheckMsg.textContent = "";
+                passwordCheckMsg.className = "id-check-msg";
+                passwordMatch = false;
+            } else if (password === passwordConfirm) {
+                passwordCheckMsg.textContent = "비밀번호가 일치합니다.";
+                passwordCheckMsg.className = "id-check-msg success";
+                passwordMatch = true;
+            } else {
+                passwordCheckMsg.textContent = "비밀번호가 일치하지 않습니다.";
+                passwordCheckMsg.className = "id-check-msg error";
+                passwordMatch = false;
+            }
+            updateSubmitButton();
+        }
+        
+        passwordInput.addEventListener('input', checkPasswordMatch);
+        passwordConfirmInput.addEventListener('input', checkPasswordMatch);
+        
+        function updateSubmitButton() {
+            const submitBtn = document.getElementById('submitBtn');
+            if (idAvailable && passwordMatch) {
+                submitBtn.disabled = false;
+            } else {
+                submitBtn.disabled = true;
+            }
+        }
+        
+        // 폼 제출 전에 ID 체크 여부 및 변경 여부, 비밀번호 일치 확인
+        document.getElementById('signUpForm').addEventListener('submit', function(e) {
+            const currentId = document.getElementById('id').value;
+            if (!idAvailable || currentId !== checkedId) {
+                e.preventDefault();
+                alert("ID 중복 체크를 완료하고, 체크한 ID로만 회원가입 가능합니다.");
+                document.getElementById('submitBtn').disabled = true;
+                return;
+            }
+            
+            if (!passwordMatch) {
+                e.preventDefault();
+                alert("비밀번호가 일치하지 않습니다.");
+                return;
+            }
+        });
+    </script>
+</body>
+</html>

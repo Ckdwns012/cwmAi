@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<mapper namespace="com.example.cwmAi.Repository.loginMapper">
+
+    <select id="findById" parameterType="com.example.cwmAi.dto.loginDTO" resultType="com.example.cwmAi.dto.loginDTO">
+        SELECT id, password
+        FROM member
+        WHERE id = #{id}
+    </select>
+    <insert id="signIn" parameterType="com.example.cwmAi.dto.loginDTO">
+        INSERT INTO member
+        (id,password,name,email)
+        VALUES
+        (#{id},#{password},#{name},#{email})
+    </insert>
+    <select id="checkId" parameterType="string" resultType="int">
+        SELECT COUNT(*)
+        FROM member
+        WHERE id = #{id}
+    </select>
+
+</mapper>

@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <title>파일 업로드</title>
+</head>
+<body>
+<h2>파일 업로드</h2>
+<form id="uploadForm" enctype="multipart/form-data">
+    <input type="file" name="file" id="fileInput">
+    <button type="submit">업로드</button>
+</form>
+
+<script>
+    const form = document.getElementById('uploadForm');
+
+    form.addEventListener('submit', async (e) => {
+        e.preventDefault();
+
+        const fileInput = document.getElementById('fileInput');
+        if (fileInput.files.length === 0) {
+            alert("업로드할 파일을 선택해주세요.");
+            return;
+        }
+
+        const formData = new FormData();
+        formData.append('file', fileInput.files[0]);
+
+        try {
+            const response = await fetch('/upload', {
+                method: 'POST',
+                body: formData
+            });
+            const result = await response.text();
+
+            if (result.startsWith("파일 업로드 성공")) {
+                alert(result); // 업로드 성공 알람
+                window.location.href = '/files'; // 파일 목록 페이지로 이동
+            } else {
+                alert(result); // 실패 메시지
+            }
+        } catch (err) {
+            alert("업로드 중 오류 발생: " + err.message);
+        }
+    });
+</script>
+</body>
+</html>

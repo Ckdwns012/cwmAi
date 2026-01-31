@@ -1,0 +1,848 @@
+<!-- src/main/resources/templates/aiChatPage.html (UI/UX 개선 버전) -->
+<!DOCTYPE html>
+<html lang="ko" xmlns:th="http://www.thymeleaf.org">
+<script th:inline="javascript">
+    /*<![CDATA[*/
+    const isAdmin = /*[[${isAdmin}]]*/ false;
+    /*]]>*/
+</script>
+<head>
+    <meta charset="UTF-8">
+    <title>AI 채팅 및 파일 관리 통합 페이지</title>
+    <style>
+        /* 기본 레이아웃 및 리셋 */
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 0; padding: 0; display: flex; height: 100vh; background-color: #f4f4f4; }
+        .container { display: flex; width: 100%; box-shadow: 0 0 10px rgba(0,0,0,0.1); position: relative; overflow: hidden; }
+        .pane { padding: 20px; box-sizing: border-box; display: flex; flex-direction: column; background-color: #fff; }
+        .left-pane { flex: 2; border-right: 1px solid #ddd; transition: flex 0.5s cubic-bezier(0.4, 0, 0.2, 1); }
+        .left-pane.expanded { flex: 1; }
+        .right-pane { 
+            flex: 1;
+            min-width: 300px;
+            transition: flex 0.5s cubic-bezier(0.4, 0, 0.2, 1), min-width 0.5s cubic-bezier(0.4, 0, 0.2, 1), padding 0.5s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.3s ease, visibility 0s, transform 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+            opacity: 1;
+            visibility: visible;
+            transform: translateX(0);
+        }
+        .right-pane.hidden { 
+            flex: 0 0 0;
+            min-width: 0;
+            padding: 0;
+            margin: 0;
+            transform: translateX(100%);
+            opacity: 0;
+            visibility: hidden;
+            transition: flex 0.5s cubic-bezier(0.4, 0, 0.2, 1), min-width 0.5s cubic-bezier(0.4, 0, 0.2, 1), padding 0.5s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.3s ease 0.2s, visibility 0s 0.5s, transform 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+            pointer-events: none;
+            overflow: hidden;
+            border: none;
+        }
+        
+        /* 파일 관리 영역 토글 버튼 */
+        .toggle-file-pane-btn {
+            position: absolute;
+            right: 0;
+            top: 50%;
+            transform: translateY(-50%);
+            width: 40px;
+            height: 80px;
+            background-color: #007bff;
+            color: white;
+            border: none;
+            border-radius: 8px 0 0 8px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 20px;
+            z-index: 10;
+            box-shadow: -2px 0 5px rgba(0,0,0,0.2);
+            transition: all 0.3s ease;
+        }
+        .toggle-file-pane-btn:hover {
+            background-color: #0056b3;
+            width: 45px;
+        }
+        .toggle-file-pane-btn.hidden {
+            display: none;
+        }
+
+        /* AI 채팅 영역 */
+        #chatBox { flex-grow: 1; border: 1px solid #ccc; border-radius: 8px; padding: 15px; overflow-y: auto; margin-bottom: 10px; background-color: #fafafa; }
+        .message { margin-bottom: 10px; padding: 8px 12px; border-radius: 15px; max-width: 80%; display: flex; align-items: flex-start; gap: 6px; }
+        .user { background-color: #007bff; color: white; align-self: flex-end; margin-left: auto; }
+        .ai { background-color: #e9ecef; color: #333; margin-right: auto; }
+        .ai-avatar { width: 24px; height: 24px; border-radius: 50%; flex-shrink: 0; object-fit: cover; background-color: #e9ecef; align-self: flex-start; margin-top: 0; }
+        .message-content { flex: 1; margin: 0; padding: 0; line-height: 1.4; }
+        .message-content span { display: inline-block; vertical-align: top; }
+        .loading { font-style: italic; color: gray; }
+        .related-articles-btn { 
+            margin-top: 10px; 
+            padding: 8px 16px; 
+            background-color: #007bff; 
+            color: white; 
+            border: none; 
+            border-radius: 8px; 
+            cursor: pointer; 
+            font-size: 14px;
+        }
+        .related-articles-container { 
+            margin-top: 10px; 
+            padding: 10px; 
+            background-color: #f8f9fa; 
+            border-radius: 8px; 
+            display: none;
+        }
+        .related-articles-container.show { display: block; }
+        .article-item { 
+            padding: 8px; 
+            margin: 5px 0; 
+            background-color: white; 
+            border-left: 3px solid #007bff; 
+            border-radius: 4px;
+        }
+
+        .chat-input-area { display: flex; gap: 10px; }
+        .chat-input-area input { flex-grow: 1; padding: 10px; border: 1px solid #ccc; border-radius: 8px; }
+        .chat-input-area button { padding: 10px 20px; background-color: #28a745; color: white; border: none; border-radius: 8px; cursor: pointer; transition: background-color 0.3s ease; }
+        .chat-input-area button:disabled { background-color: #6c757d; color: white; cursor: not-allowed; opacity: 0.6; }
+
+        .ai-response {
+        /* 이 설정이 핵심입니다. 공백과 줄바꿈을 그대로 화면에 표시해 줍니다. */
+        white-space: pre-wrap;
+
+        /* 채팅창의 크기와 스크롤 설정을 위한 기본 스타일 (선택사항) */
+        height: 400px;
+        overflow-y: auto;
+        border: 1px solid #ccc;
+        padding: 10px;
+        margin-bottom: 10px;}
+
+        /* 파일 관리 영역 */
+        .file-list-container { flex-grow: 1; overflow-y: auto; margin-bottom: 15px; }
+        .file-list-container h3 { margin-top: 0; margin-bottom: 10px; }
+        #fileList { padding-left: 0; margin: 0; list-style: none; }
+        .file-item { display: flex; justify-content: space-between; align-items: center; padding: 10px 0; border-bottom: 1px solid #eee; }
+        .file-item-content { display: flex; align-items: center; gap: 10px; flex: 1; }
+        .file-item input[type="checkbox"] { width: 18px; height: 18px; cursor: pointer; margin: 0; }
+        .file-item a { text-decoration: none; color: #0056b3; flex: 1; }
+        .file-item a:hover { text-decoration: underline; }
+        .delete-btn { background-color: #dc3545; color: white; border: none; padding: 5px 10px; border-radius: 4px; cursor: pointer; }
+        .file-selection-info { margin-bottom: 10px; padding: 8px; background-color: #f8f9fa; border-radius: 4px; font-size: 13px; color: #666; }
+
+        .upload-button-area { text-align: right; }
+        #addFileBtn { padding: 10px 20px; background-color: #007bff; color: white; border: none; border-radius: 8px; cursor: pointer; }
+
+        /* 모달 (팝업) 스타일 */
+        .modal { display: none; position: fixed; z-index: 1; left: 0; top: 0; width: 100%; height: 100%; background-color: rgba(0,0,0,0.5); }
+        .modal-content { background-color: #fff; margin: 15% auto; padding: 30px; border: 1px solid #888; width: 400px; border-radius: 10px; box-shadow: 0 5px 15px rgba(0,0,0,0.3); }
+        .close { color: #aaa; float: right; font-size: 28px; font-weight: bold; cursor: pointer; }
+        .close:hover, .close:focus { color: #333; text-decoration: none; }
+        #uploadForm button { width: 100%; padding: 10px; margin-top: 15px; background-color: #28a745; color: white; border: none; border-radius: 5px; cursor: pointer; }
+    </style>
+</head>
+<body>
+<div class="container">
+    <!-- 왼쪽 절반: AI 채팅 -->
+<div class="pane left-pane">
+    <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 10px;">
+        <h2 style="display: flex; align-items: center; justify-content: center; gap: 10px; margin: -10px 0 0 0; flex: 1;">
+            <img src="/images/cwmAi.png" alt="AI" style="width: 160px; height: 55px; border-radius: 0%; object-fit: cover; margin: 0; vertical-align: middle;" onerror="this.style.display='none';">
+        </h2>
+        <button id="logoutBtn" style="background: none; border: none; cursor: pointer; padding: 0; transition: all 0.3s ease; margin-top: -5px;" onmouseover="this.style.transform='translateY(-2px)'; this.style.opacity='0.8';" onmouseout="this.style.transform='translateY(0)'; this.style.opacity='1';">
+            <img src="/images/logout.png" alt="로그아웃" style="width: 30px; height: 30px; object-fit: contain;" onerror="this.style.display='none';">
+        </button>
+    </div>
+    <!-- 카테고리 선택 -->
+    <div style="margin-bottom: 10px; display: flex; gap: 10px; align-items: center; justify-content: space-between;">
+        <div style="display: flex; gap: 10px; align-items: center; flex: 1;">
+            <label for="categorySelect" style="margin: 0; font-weight: bold; color: #555;">분야 선택: </label>
+            <select id="categorySelect" style="padding: 8px; border: 1px solid #ccc; border-radius: 8px; min-width: 200px; font-size: 14px; flex: 1;"></select>
+        </div>
+        <button id="addCategoryBtn" style="padding: 8px 16px; background-color: #6c757d; color: #fff; border: none; border-radius: 8px; cursor: pointer; font-size: 14px; white-space: nowrap; display: none;">분야 추가</button>
+    </div>
+    <!-- 여기에 ai-response 클래스 추가 -->
+    <div id="chatBox" class="ai-response"></div>
+    <div class="chat-input-area">
+        <input type="text" id="userInput" placeholder="메시지 입력">
+        <button id="sendBtn">전송</button>
+    </div>
+</div>
+
+    <!-- 오른쪽 절반: 파일 목록 및 업로드 버튼 -->
+    <div class="pane right-pane" id="rightPane">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 25px;">
+            <h2 style="margin: 0;">파일 관리</h2>
+            <button id="hideFilePaneBtn" style="background: none; border: none; font-size: 24px; cursor: pointer; color: #666; padding: 5px 10px;" title="파일 관리 영역 숨기기">&#10005;</button>
+        </div>
+        <div class="file-list-container">
+            <h3>업로드된 파일</h3>
+            <div class="file-selection-info" id="fileSelectionInfo">선택된 파일: 0개 (최소 1개, 최대 5개)</div>
+            <ul id="fileList"></ul>
+        </div>
+        <div class="upload-button-area" id="uploadButtonArea" style="display: none;">
+            <button id="addFileBtn" onclick="openUploadModal()">파일 추가하기</button>
+        </div>
+    </div>
+    <!-- 파일 관리 영역 토글 버튼 (숨김 상태일 때만 표시) -->
+    <button id="showFilePaneBtn" class="toggle-file-pane-btn hidden" title="파일 관리 영역 보이기">◀</button>
+</div>
+<!-- 파일 업로드 모달 (팝업) -->
+<div id="uploadModal" class="modal">
+    <div class="modal-content">
+        <span class="close" onclick="closeUploadModal()">&times;</span>
+        <h3>파일 업로드</h3>
+        <form id="uploadForm" enctype="multipart/form-data">
+            <label for="uploadCategory">분야 선택: </label>
+            <select id="uploadCategory" name="category" required></select>
+            <br/><br/>
+            <input type="file" id="fileInput" name="file" required />
+            <button type="submit">업로드 시작</button>
+        </form>
+    </div>
+</div>
+
+<!-- 분야 추가 모달 (팝업) -->
+<div id="categoryModal" class="modal">
+    <div class="modal-content">
+        <span class="close" onclick="closeCategoryModal()">&times;</span>
+        <h3>분야 추가</h3>
+        <form id="categoryForm">
+            <label for="newCategoryInput">새 분야 명: </label>
+            <input type="text" id="newCategoryInput" placeholder="분야명을 입력하세요" required 
+                   style="width: 100%; padding: 8px; margin-top: 10px; border: 1px solid #ccc; border-radius: 8px; box-sizing: border-box;">
+            <button type="submit" style="width: 100%; padding: 10px; margin-top: 15px; background-color: #28a745; color: white; border: none; border-radius: 5px; cursor: pointer;">추가하기</button>
+        </form>
+    </div>
+</div>
+
+<script>
+    // --- 왼쪽 Pane (AI Chat) JavaScript ---
+    const chatBox = document.getElementById('chatBox');
+    const userInput = document.getElementById('userInput');
+    const sendBtn = document.getElementById('sendBtn');
+    const categorySelect = document.getElementById('categorySelect');
+    const uploadCategorySelect = document.getElementById('uploadCategory');
+    const newCategoryInput = document.getElementById('newCategoryInput');
+    const addCategoryBtn = document.getElementById('addCategoryBtn');
+    const categoryModal = document.getElementById('categoryModal');
+    const categoryForm = document.getElementById('categoryForm');
+    const defaultCategories = ["계약", "개인정보보호", "정보보안", "정보화사업", "공제사업"];
+
+        // 엔터 키 입력 감지 이벤트 리스너 추가
+    userInput.addEventListener('keypress', (e) => {
+        if (e.key === 'Enter' && !sendBtn.disabled) {
+            sendBtn.click(); // Enter 키 입력 시 전송 버튼 클릭 이벤트 실행
+        }
+    });
+
+    // 점 애니메이션 함수
+    function startDotAnimation(element, baseText) {
+        let dotCount = 0;
+        const interval = setInterval(() => {
+            dotCount = (dotCount % 3) + 1;
+            const dots = '.'.repeat(dotCount);
+            element.textContent = baseText + dots;
+        }, 500);
+        return interval; // interval ID 반환하여 나중에 clearInterval 할 수 있게 함
+    }
+
+    sendBtn.addEventListener('click', async () => {
+        const question = userInput.value.trim();
+        if(!question || sendBtn.disabled) return;
+        
+        // 전송 버튼만 비활성화 (회색으로 표시)
+        sendBtn.disabled = true;
+
+        // UI/UX 개선: 말풍선 스타일 적용
+        chatBox.innerHTML += `<div class="message user">나: ${question}</div>`;
+        userInput.value = '';
+        chatBox.scrollTop = chatBox.scrollHeight;
+
+        const loadingDiv = document.createElement('div');
+        loadingDiv.classList.add('message', 'ai', 'loading');
+        const avatarImg = document.createElement('img');
+        avatarImg.src = '/images/Cw_ci.png';
+        avatarImg.alt = 'AI';
+        avatarImg.classList.add('ai-avatar');
+        avatarImg.onerror = function() { this.style.display = 'none'; };
+        const contentDiv = document.createElement('div');
+        contentDiv.classList.add('message-content');
+        const loadingText = document.createElement('span');
+        loadingText.textContent = '관련조항을 검색중입니다';
+        contentDiv.appendChild(loadingText);
+        loadingDiv.appendChild(avatarImg);
+        loadingDiv.appendChild(contentDiv);
+        chatBox.appendChild(loadingDiv);
+        chatBox.scrollTop = chatBox.scrollHeight;
+
+        // 1단계 점 애니메이션 시작
+        let animationInterval = startDotAnimation(loadingText, '관련조항을 검색중입니다');
+
+        try {
+            const category = categorySelect.value;
+            
+            // 선택된 파일 목록 확인
+            if (selectedFiles.size === 0) {
+                alert('최소 1개의 파일을 선택해주세요.');
+                // 파일 선택 오류 시에도 전송 버튼 활성화
+                sendBtn.disabled = false;
+                return;
+            }
+            
+            // 선택된 파일 목록을 배열로 변환
+            const selectedFilesArray = Array.from(selectedFiles);
+            
+            // 1단계: 관련 조항 추천
+            const stage1Res = await fetch(
+                `/lm/api/ask/stage1?question=${encodeURIComponent(question)}&category=${encodeURIComponent(category)}`,
+                { 
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ files: selectedFilesArray })
+                }
+            );
+            if (!stage1Res.ok) throw new Error(`HTTP error! status: ${stage1Res.status}`);
+            
+            const recommendedTitles = await stage1Res.json();
+            
+            if (!recommendedTitles || recommendedTitles.length === 0) {
+                clearInterval(animationInterval);
+                chatBox.removeChild(loadingDiv);
+                const errorDiv = document.createElement('div');
+                errorDiv.classList.add('message', 'ai');
+                const avatarImg = document.createElement('img');
+                avatarImg.src = '/images/Cw_ci.png';
+                avatarImg.alt = 'AI';
+                avatarImg.classList.add('ai-avatar');
+                avatarImg.onerror = function() { this.style.display = 'none'; };
+                const contentDiv = document.createElement('div');
+                contentDiv.classList.add('message-content');
+                contentDiv.textContent = '해당 분야의 관련 조항을 찾을 수 없습니다. 보다 정확한 법률 용어로 다시 질문해주세요.';
+                errorDiv.appendChild(avatarImg);
+                errorDiv.appendChild(contentDiv);
+                chatBox.appendChild(errorDiv);
+                chatBox.scrollTop = chatBox.scrollHeight;
+                // 에러 발생 시에도 전송 버튼 활성화
+                sendBtn.disabled = false;
+                return;
+            }
+            
+            // 2단계: 최종 답변 생성
+            clearInterval(animationInterval);
+            loadingText.textContent = '조항검색 완료! 답변을 생성중입니다';
+            animationInterval = startDotAnimation(loadingText, '조항검색 완료! 답변을 생성중입니다');
+            chatBox.scrollTop = chatBox.scrollHeight;
+            
+            const stage2Res = await fetch(
+                `/lm/api/ask/stage2?question=${encodeURIComponent(question)}&category=${encodeURIComponent(category)}`,
+                { 
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(recommendedTitles)
+                }
+            );
+            if (!stage2Res.ok) throw new Error(`HTTP error! status: ${stage2Res.status}`);
+
+            const answer = await stage2Res.text();
+            clearInterval(animationInterval);
+            chatBox.removeChild(loadingDiv);
+            const messageDiv = document.createElement('div');
+            messageDiv.classList.add('message', 'ai');
+            const avatarImg = document.createElement('img');
+            avatarImg.src = '/images/Cw_ci.png';
+            avatarImg.alt = 'AI';
+            avatarImg.classList.add('ai-avatar');
+            avatarImg.onerror = function() { this.style.display = 'none'; };
+            const contentDiv = document.createElement('div');
+            contentDiv.classList.add('message-content');
+            const textSpan = document.createElement('span');
+            contentDiv.appendChild(textSpan);
+            messageDiv.appendChild(avatarImg);
+            messageDiv.appendChild(contentDiv);
+            chatBox.appendChild(messageDiv);
+            typeMessage(textSpan, ': ' + answer, () => {
+                // 답변 완료 후 전송 버튼 활성화
+                sendBtn.disabled = false;
+                userInput.focus();
+            });
+
+        } catch (error) {
+            clearInterval(animationInterval);
+            chatBox.removeChild(loadingDiv);
+            const errorDiv = document.createElement('div');
+            errorDiv.classList.add('message', 'ai');
+            errorDiv.style.color = 'red';
+            const avatarImg = document.createElement('img');
+            avatarImg.src = '/images/Cw_ci.png';
+            avatarImg.alt = 'AI';
+            avatarImg.classList.add('ai-avatar');
+            avatarImg.onerror = function() { this.style.display = 'none'; };
+            const contentDiv = document.createElement('div');
+            contentDiv.classList.add('message-content');
+            contentDiv.textContent = `오류: ${error.message}. 서버 콘솔을 확인하세요.`;
+            errorDiv.appendChild(avatarImg);
+            errorDiv.appendChild(contentDiv);
+            chatBox.appendChild(errorDiv);
+            // 에러 발생 시에도 전송 버튼 활성화
+            sendBtn.disabled = false;
+        }
+        chatBox.scrollTop = chatBox.scrollHeight;
+    });
+
+
+    // --- 오른쪽 Pane (File Management) JavaScript ---
+    const fileList = document.getElementById('fileList');
+    const uploadForm = document.getElementById('uploadForm');
+    const fileInput = document.getElementById('fileInput');
+    const uploadModal = document.getElementById('uploadModal');
+    const fileSelectionInfo = document.getElementById('fileSelectionInfo');
+    
+    // 선택된 파일 목록 관리
+    let selectedFiles = new Set();
+
+    function openUploadModal() { uploadModal.style.display = 'block'; }
+    function closeUploadModal() { uploadModal.style.display = 'none'; fileInput.value = ''; }
+
+    // 분야 옵션 초기화
+    function setCategoryOptions(categories) {
+        const targets = [categorySelect, uploadCategorySelect];
+        targets.forEach(select => {
+            const currentSelection = select.value;
+            select.innerHTML = '';
+            categories.forEach(cat => {
+                const option = document.createElement('option');
+                option.value = cat;
+                option.textContent = cat;
+                select.appendChild(option);
+            });
+            if (categories.includes(currentSelection)) {
+                select.value = currentSelection;
+            }
+        });
+    }
+
+    async function loadCategories() {
+        try {
+            const res = await fetch('/api/categories');
+            if (!res.ok) throw new Error('카테고리 목록을 불러오지 못했습니다.');
+            const categories = await res.json();
+            setCategoryOptions(categories.length ? categories : defaultCategories);
+        } catch (e) {
+            console.warn(e);
+            setCategoryOptions(defaultCategories);
+        } finally {
+            if (!categorySelect.value && defaultCategories.length) {
+                categorySelect.value = defaultCategories[0];
+                uploadCategorySelect.value = defaultCategories[0];
+            }
+            loadFiles();
+        }
+    }
+
+    // 분야 추가 모달 열기/닫기
+    function openCategoryModal() {
+        categoryModal.style.display = 'block';
+        newCategoryInput.value = '';
+        newCategoryInput.focus();
+    }
+    
+    function closeCategoryModal() {
+        categoryModal.style.display = 'none';
+        newCategoryInput.value = '';
+    }
+
+    async function addCategory(category) {
+        // admin 체크
+        if (typeof isAdmin === 'undefined' || !isAdmin) {
+            alert('권한이 없습니다. 관리자만 분야를 추가할 수 있습니다.');
+            return;
+        }
+        
+        const trimmed = category.trim();
+        if (!trimmed) {
+            alert('분야명을 입력해주세요.');
+            return;
+        }
+
+        try {
+            // 서버에 분야 추가 요청 (디렉토리 생성)
+            const formData = new FormData();
+            formData.append('category', trimmed);
+            
+            const response = await fetch('/api/categories/add', {
+                method: 'POST',
+                body: formData
+            });
+            
+            const result = await response.text();
+            
+            if (result === 'success') {
+                // 성공 시 select에 추가
+                const targets = [categorySelect, uploadCategorySelect];
+                targets.forEach(select => {
+                    const exists = Array.from(select.options).some(opt => opt.value === trimmed);
+                    if (!exists) {
+                        const option = document.createElement('option');
+                        option.value = trimmed;
+                        option.textContent = trimmed;
+                        select.appendChild(option);
+                    }
+                    select.value = trimmed;
+                });
+                closeCategoryModal();
+                loadFiles();
+            } else {
+                alert(result);
+            }
+        } catch (error) {
+            console.error('분야 추가 오류:', error);
+            alert('분야 추가 중 오류가 발생했습니다: ' + error.message);
+        }
+    }
+
+    // 분야 추가 버튼 클릭 시 모달 열기
+    addCategoryBtn.addEventListener('click', openCategoryModal);
+    
+    // 분야 추가 폼 제출 처리
+    categoryForm.addEventListener('submit', (e) => {
+        e.preventDefault();
+        addCategory(newCategoryInput.value);
+    });
+    
+    // 모달 외부 클릭 시 닫기
+    window.addEventListener('click', (e) => {
+        if (e.target === categoryModal) {
+            closeCategoryModal();
+        }
+    });
+
+    // 1. 파일 목록 불러오기 및 렌더링
+    async function loadFiles() {
+        const currentCategory = categorySelect.value;
+        try {
+            const response = await fetch(`/api/files?category=${encodeURIComponent(currentCategory)}`);
+            if (!response.ok) throw new Error('파일 목록을 불러오지 못했습니다.');
+            const files = await response.json();
+            renderFiles(files);
+        } catch (error) {
+            console.error(error);
+        }
+    }
+
+    function renderFiles(files) {
+        fileList.innerHTML = '';
+        const currentCategory = categorySelect.value;
+        
+        // 분야가 변경되면 선택된 파일 초기화
+        selectedFiles.clear();
+        
+        // 최초 로드 시 상위 3개 자동 선택
+        const filesToSelect = files.slice(0, Math.min(3, files.length));
+        filesToSelect.forEach(file => selectedFiles.add(file));
+        
+        files.forEach((file, index) => {
+            const li = document.createElement('li');
+            li.classList.add('file-item');
+            // 파일명에서 확장자 제거 (마지막 . 이후 부분 제거)
+            const fileNameWithoutExtension = file.lastIndexOf('.') > 0 ? file.substring(0, file.lastIndexOf('.')) : file;
+            const isChecked = selectedFiles.has(file);
+            
+            const deleteButton = (typeof isAdmin !== 'undefined' && isAdmin) 
+                ? `<button class="delete-btn" onclick="deleteFile('${file}')">삭제</button>` 
+                : '';
+            li.innerHTML = `
+                <div class="file-item-content">
+                    <input type="checkbox" id="file-${index}" data-filename="${file}" ${isChecked ? 'checked' : ''} onchange="handleFileSelection('${file}')">
+                    <a href="/files/download?filename=${encodeURIComponent(file)}&category=${encodeURIComponent(currentCategory)}" download="${file}">${fileNameWithoutExtension}</a>
+                </div>
+                ${deleteButton}
+            `;
+            fileList.appendChild(li);
+        });
+        
+        updateFileSelectionInfo();
+    }
+    
+    // 파일 선택 처리 함수
+    function handleFileSelection(filename) {
+        const checkbox = document.querySelector(`input[data-filename="${filename}"]`);
+        
+        if (checkbox.checked) {
+            // 최대 5개 제한
+            if (selectedFiles.size >= 5) {
+                checkbox.checked = false;
+                alert('최대 5개까지만 선택할 수 있습니다.');
+                return;
+            }
+            selectedFiles.add(filename);
+        } else {
+            // 최소 1개 제한
+            if (selectedFiles.size <= 1) {
+                checkbox.checked = true;
+                alert('최소 1개는 선택해야 합니다.');
+                return;
+            }
+            selectedFiles.delete(filename);
+        }
+        
+        updateFileSelectionInfo();
+    }
+    
+    // 파일 선택 정보 업데이트
+    function updateFileSelectionInfo() {
+        const count = selectedFiles.size;
+        fileSelectionInfo.textContent = `선택된 파일: ${count}개 (최소 1개, 최대 5개)`;
+        if (count === 0) {
+            fileSelectionInfo.style.color = '#dc3545';
+        } else if (count === 5) {
+            fileSelectionInfo.style.color = '#ffc107';
+        } else {
+            fileSelectionInfo.style.color = '#666';
+        }
+    }
+
+    // 2. 파일 업로드 처리
+    uploadForm.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        if (fileInput.files.length === 0) return;
+        const formData = new FormData();
+        formData.append('file', fileInput.files[0]); // 첫 번째 파일만 처리
+        const uploadCategory = document.getElementById('uploadCategory').value;
+        formData.append('category', uploadCategory);
+
+        try {
+            const response = await fetch('/upload', { method: 'POST', body: formData });
+            const result = await response.json();
+
+            alert(result.message);
+            if (result.status === "success") {
+                categorySelect.value = uploadCategory; // 업로드한 분야로 전환
+                closeUploadModal();
+                loadFiles(); // 성공 시 목록 새로고침 (RAG에 바로 반영)
+            }
+        } catch (err) {
+            alert("업로드 중 오류 발생: " + err.message);
+        }
+    });
+
+    // 3. 파일 삭제 처리
+    async function deleteFile(filename) {
+        if (!confirm(`'${filename}'을(를) 정말 삭제하시겠습니까?`)) return;
+
+        try {
+            const currentCategory = categorySelect.value;
+            const response = await fetch(`/files/delete?filename=${encodeURIComponent(filename)}&category=${encodeURIComponent(currentCategory)}`);
+            const result = await response.text();
+            alert(result);
+            if (result.startsWith("삭제 성공")) {
+                // 삭제된 파일이 선택 목록에 있으면 제거
+                selectedFiles.delete(filename);
+                loadFiles(); // 성공 시 목록 새로고침 (RAG에 바로 반영)
+            }
+        } catch (err) {
+            alert("삭제 중 오류 발생: " + err.message);
+        }
+    }
+
+    // 타이핑 효과로 메시지 표시
+    function typeMessage(element, text, callback) {
+        // 기존 타이핑 애니메이션이 있으면 정리
+        if (element.dataset.typingInterval) {
+            clearInterval(parseInt(element.dataset.typingInterval));
+        }
+        
+        element.textContent = '';
+        let index = 0;
+        const typingInterval = setInterval(() => {
+            if (index < text.length) {
+                element.textContent += text.charAt(index);
+                index++;
+                chatBox.scrollTop = chatBox.scrollHeight;
+            } else {
+                clearInterval(typingInterval);
+                delete element.dataset.typingInterval;
+                if (callback) callback();
+            }
+        }, 30); // 30ms마다 한 글자씩
+        
+        // interval ID를 element에 저장
+        element.dataset.typingInterval = typingInterval.toString();
+    }
+
+    // 페이지 로드 시 초기 인사 메시지 표시
+    function showInitialGreeting(selectedCategory) {
+        const greetingMessage = ': 안녕하세요, 저는 법률 및 규정 어시스턴트에요. 관련 분야를 선택하고 질문해 주세요.';
+        const messageDiv = document.createElement('div');
+        messageDiv.classList.add('message', 'ai');
+        const avatarImg = document.createElement('img');
+        avatarImg.src = '/images/Cw_ci.png';
+        avatarImg.alt = 'AI';
+        avatarImg.classList.add('ai-avatar');
+        avatarImg.onerror = function() { this.style.display = 'none'; };
+        const contentDiv = document.createElement('div');
+        contentDiv.classList.add('message-content');
+        const textSpan = document.createElement('span');
+        contentDiv.appendChild(textSpan);
+        messageDiv.appendChild(avatarImg);
+        messageDiv.appendChild(contentDiv);
+        chatBox.appendChild(messageDiv);
+        typeMessage(textSpan, greetingMessage, () => {
+            // 초기 인사말 타이핑 완료 후, 선택된 분야가 있으면 분야 메시지 표시
+            if (selectedCategory) {
+                updateCategoryMessage(selectedCategory);
+            }
+        });
+    }
+
+    // 페이지 로드 시 분야/파일 목록 불러오기 및 초기 인사 메시지 표시
+    async function initializePage() {
+        // admin 여부에 따라 UI 제어
+        if (typeof isAdmin !== 'undefined' && isAdmin) {
+            // admin인 경우 모든 버튼 표시
+            document.getElementById('addCategoryBtn').style.display = 'block';
+            document.getElementById('uploadButtonArea').style.display = 'block';
+        } else {
+            // admin이 아닌 경우 분야 추가, 파일 추가 버튼 숨김
+            document.getElementById('addCategoryBtn').style.display = 'none';
+            document.getElementById('uploadButtonArea').style.display = 'none';
+        }
+        
+        await loadCategories();
+        const selectedCategory = categorySelect.value;
+        showInitialGreeting(selectedCategory);
+    }
+    
+    initializePage();
+
+    // 로그아웃 버튼 클릭 이벤트
+    const logoutBtn = document.getElementById('logoutBtn');
+    logoutBtn.addEventListener('click', async () => {
+        if (confirm('로그아웃 하시겠습니까?')) {
+            try {
+                const response = await fetch('/logout', {
+                    method: 'POST',
+                    credentials: 'include'
+                });
+                if (response.ok) {
+                    window.location.href = '/loginPage';
+                } else {
+                    // 로그아웃 엔드포인트가 없어도 쿠키 삭제 후 리다이렉트
+                    document.cookie = 'accessToken=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT;';
+                    window.location.href = '/loginPage';
+                }
+            } catch (error) {
+                console.error('로그아웃 오류:', error);
+                // 오류 발생 시에도 쿠키 삭제 후 리다이렉트
+                document.cookie = 'accessToken=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT;';
+                window.location.href = '/loginPage';
+            }
+        }
+    });
+
+    // 파일 관리 영역 토글 기능
+    const rightPane = document.getElementById('rightPane');
+    const hideFilePaneBtn = document.getElementById('hideFilePaneBtn');
+    const showFilePaneBtn = document.getElementById('showFilePaneBtn');
+    const leftPane = document.querySelector('.left-pane');
+
+    hideFilePaneBtn.addEventListener('click', () => {
+        rightPane.classList.add('hidden');
+        showFilePaneBtn.classList.remove('hidden');
+        leftPane.classList.add('expanded');
+    });
+
+    showFilePaneBtn.addEventListener('click', () => {
+        rightPane.classList.remove('hidden');
+        showFilePaneBtn.classList.add('hidden');
+        leftPane.classList.remove('expanded');
+    });
+
+    // 분야 선택 메시지 업데이트 함수
+    function updateCategoryMessage(selectedCategory) {
+        const message = `: 현재 선택된 분야는 "${selectedCategory}"입니다. 이 분야에 대한 질문을 해주세요.`;
+        
+        // 모든 분야 선택 메시지 찾기 (마지막 것을 찾기 위해)
+        const allCategoryMessages = chatBox.querySelectorAll('.category-selection-message');
+        const existingMessageDiv = allCategoryMessages.length > 0 ? allCategoryMessages[allCategoryMessages.length - 1] : null;
+        
+        if (existingMessageDiv) {
+            // 기존 메시지 다음에 사용자 메시지나 AI 답변이 있는지 확인
+            let hasSubsequentMessages = false;
+            let nextSibling = existingMessageDiv.nextElementSibling;
+            while (nextSibling) {
+                if (nextSibling.classList.contains('message')) {
+                    // 사용자 메시지이거나, 분야 선택 메시지가 아닌 AI 메시지인 경우
+                    if (nextSibling.classList.contains('user') || 
+                        (nextSibling.classList.contains('ai') && !nextSibling.classList.contains('category-selection-message'))) {
+                        hasSubsequentMessages = true;
+                        break;
+                    }
+                }
+                nextSibling = nextSibling.nextElementSibling;
+            }
+            
+            if (hasSubsequentMessages) {
+                // 사용자 메시지나 AI 답변이 있으면 새로운 메시지 추가
+                const messageDiv = document.createElement('div');
+                messageDiv.classList.add('message', 'ai', 'category-selection-message');
+                messageDiv.setAttribute('data-category-message', 'true');
+                const avatarImg = document.createElement('img');
+                avatarImg.src = '/images/Cw_ci.png';
+                avatarImg.alt = 'AI';
+                avatarImg.classList.add('ai-avatar');
+                avatarImg.onerror = function() { this.style.display = 'none'; };
+                const contentDiv = document.createElement('div');
+                contentDiv.classList.add('message-content');
+                const textSpan = document.createElement('span');
+                contentDiv.appendChild(textSpan);
+                messageDiv.appendChild(avatarImg);
+                messageDiv.appendChild(contentDiv);
+                chatBox.appendChild(messageDiv);
+                typeMessage(textSpan, message);
+            } else {
+                // 사용자 메시지나 AI 답변이 없으면 기존 메시지 업데이트
+                const textSpan = existingMessageDiv.querySelector('.message-content span');
+                if (textSpan) {
+                    typeMessage(textSpan, message);
+                }
+            }
+        } else {
+            // 기존 메시지가 없으면 새로 추가
+            const messageDiv = document.createElement('div');
+            messageDiv.classList.add('message', 'ai', 'category-selection-message');
+            messageDiv.setAttribute('data-category-message', 'true');
+            const avatarImg = document.createElement('img');
+            avatarImg.src = '/images/Cw_ci.png';
+            avatarImg.alt = 'AI';
+            avatarImg.classList.add('ai-avatar');
+            avatarImg.onerror = function() { this.style.display = 'none'; };
+            const contentDiv = document.createElement('div');
+            contentDiv.classList.add('message-content');
+            const textSpan = document.createElement('span');
+            contentDiv.appendChild(textSpan);
+            messageDiv.appendChild(avatarImg);
+            messageDiv.appendChild(contentDiv);
+            chatBox.appendChild(messageDiv);
+            typeMessage(textSpan, message);
+        }
+    }
+
+    // 카테고리 변경 시 파일 목록 갱신 및 AI 메시지 표시
+    categorySelect.addEventListener('change', () => {
+        const selectedCategory = categorySelect.value;
+        if (selectedCategory) {
+            updateCategoryMessage(selectedCategory);
+        }
+        // 분야 변경 시 선택된 파일 초기화
+        selectedFiles.clear();
+        loadFiles();
+    });
+</script>
+
+</body>
+</html>
