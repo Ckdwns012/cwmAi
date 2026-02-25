@@ -377,5 +377,27 @@ public class DocumentChunker {
         }
         return result;
     }
+    // 0223 김소연(수정): 조항 본문에서 표/별표 참조 토큰 추출
+    // 이유: "<표1>에 따른다" 같은 문구가 있을 때 TABLE 내용을 조항 청크에 병합하기 위함
+    public List<String> extractTableReferences(String articleText) {
+        List<String> refs = new ArrayList<>();
+        if (articleText == null || articleText.isBlank()) return refs;
+
+        Pattern p = Pattern.compile("(?:<\\s*표\\s*(\\d+)\\s*>|\\b표\\s*(\\d+)\\b|\\[\\s*별표\\s*(\\d+)\\s*\\]|별표\\s*(\\d+))");
+        Matcher m = p.matcher(articleText);
+
+        while (m.find()) {
+            String tableNo = (m.group(1) != null && !m.group(1).isBlank()) ? m.group(1).trim()
+                    : (m.group(2) != null && !m.group(2).isBlank()) ? m.group(2).trim() : null;
+            String annexNo = (m.group(3) != null && !m.group(3).isBlank()) ? m.group(3).trim()
+                    : (m.group(4) != null && !m.group(4).isBlank()) ? m.group(4).trim() : null;
+
+            if (tableNo != null) refs.add("표" + tableNo);
+            if (annexNo != null) refs.add("별표" + annexNo);
+        }
+
+        // 중복 제거(순서 유지)
+        return refs.stream().distinct().toList();
+    }
 }
 

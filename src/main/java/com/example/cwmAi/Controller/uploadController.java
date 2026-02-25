@@ -1,5 +1,8 @@
 package com.example.cwmAi.Controller;
 
+import com.example.cwmAi.Util.SecurityPathUtil;
+import com.example.cwmAi.dto.FileDeleteRequest;
+import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.core.io.Resource;
 import org.springframework.core.io.ResourceLoader;
@@ -26,10 +29,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
-import java.util.Arrays;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Set;
+import java.util.*;
 import java.util.stream.Collectors;
 
 // 응답을 위한 간단한 DTO 클래스 (UploadResponse.java 파일로 별도 생성 권장)
@@ -155,21 +155,18 @@ public class uploadController {
             System.out.println("JAR 내부의 uploads 폴더를 외부로 복사하는 중 오류 발생 (무시됨): " + e.getMessage());
         }
     }
-
     @RequestMapping("uploadPage")
     public String uploadPage(){
-        return "uploadPage"; // uploadPage.html 뷰 반환
+        return "uploadPage";
     }
 
-    // JSON 응답을 위해 @ResponseBody 추가, 반환 타입 UploadResponse로 변경
     @PostMapping("/upload")
     @ResponseBody
     public UploadResponse uploadFile(
             @RequestParam("file") MultipartFile file,
             @RequestParam("category") String category,
-            jakarta.servlet.http.HttpServletRequest request
+            HttpServletRequest request
     ) {
-        // admin 체크
         String userId = (String) request.getAttribute("userId");
         if (userId == null || !"admin".equals(userId)) {
             return new UploadResponse("error", "권한이 없습니다. 관리자만 파일을 업로드할 수 있습니다.");
@@ -177,19 +174,41 @@ public class uploadController {
         if (file.isEmpty()) {
             return new UploadResponse("error", "업로드할 파일이 없습니다.");
         }
+
         try {
-            // 카테고리별 폴더 없으면 생성
+            // category 검증
+            SecurityPathUtil.validateSafeCategory(category);
+
+            String filename = StringUtils.cleanPath(Objects.requireNonNull(file.getOriginalFilename()));
+            SecurityPathUtil.validateSafeFilename(filename);
+
+            // 확장자 화이트리스트 체크 (업로드에도 적용!)
+            if (!hasAllowedExtension(filename)) {
+                return new UploadResponse("error", "허용되지 않은 파일 확장자입니다.");
+            }
+
             File uploadDir = (category == null || category.isBlank())
                     ? new File(UPLOAD_DIR)
                     : new File(UPLOAD_DIR, category);
+
             if (!uploadDir.exists()) uploadDir.mkdirs();
 
-            String filename = StringUtils.cleanPath(file.getOriginalFilename());
-            File dest = Paths.get(uploadDir.getPath(), filename).toFile();
-            file.transferTo(dest);
-            // 업로드 완료 후 메모리 저장소를 최신 상태로 갱신
+            Path basePath = uploadDir.toPath().toAbsolutePath().normalize();
+            Path destPath = SecurityPathUtil.safeResolve(basePath, filename);
+
+            // 덮어쓰기 정책: 기본은 "거부"
+            if (Files.exists(destPath)) {
+                return new UploadResponse("error", "같은 파일명이 이미 존재합니다. 파일명을 변경해 업로드해주세요.");
+            }
+
+            Files.copy(file.getInputStream(), destPath, StandardCopyOption.REPLACE_EXISTING);
+
+            // 재로딩
             aiService.reloadCategory(category);
+
             return new UploadResponse("success", "파일 업로드 성공: " + filename);
+        } catch (IllegalArgumentException e) {
+            return new UploadResponse("error", "요청 값이 올바르지 않습니다: " + e.getMessage());
         } catch (IOException e) {
             e.printStackTrace();
             return new UploadResponse("error", "파일 업로드 실패: " + e.getMessage());
@@ -200,22 +219,10 @@ public class uploadController {
     @GetMapping("/files")
     public String listFiles(Model model) {
         File folder = new File(UPLOAD_DIR);
-
-        // 파일 필터링: 숨김파일 제외, 파일만 표시
         String[] files = folder.list((dir, name) -> {
-            // 숨김 파일 제외
             if (name.startsWith(".")) return false;
-
-            // 확장자 필터링(원하면 추가)
-            String lower = name.toLowerCase();
-            return lower.endsWith(".pdf") ||
-                    lower.endsWith(".txt") ||
-                    lower.endsWith(".hwp") ||
-                    lower.endsWith(".jpg") ||
-                    lower.endsWith(".png") ||
-                    lower.endsWith(".jpeg");
+            return hasAllowedExtension(name);
         });
-
         model.addAttribute("files", files);
         return "fileListPage";
     }
@@ -317,33 +324,52 @@ public class uploadController {
                 .collect(Collectors.toList());
     }
 
-
-    @GetMapping("/files/delete")
+    /**
+     * 삭제: GET -> DELETE로 변경
+     */
+    @DeleteMapping("/api/files")
     @ResponseBody
     public String deleteFile(
-            @RequestParam String filename,
-            @RequestParam("category") String category,
-            jakarta.servlet.http.HttpServletRequest request
+            @RequestBody FileDeleteRequest req,
+            HttpServletRequest request
     ) {
-        // admin 체크
         String userId = (String) request.getAttribute("userId");
         if (userId == null || !"admin".equals(userId)) {
             return "권한이 없습니다. 관리자만 파일을 삭제할 수 있습니다.";
         }
-        File baseDir = (category == null || category.isBlank())
-                ? new File(FILE_DIR)
-                : new File(FILE_DIR, category);
-        File file = new File(baseDir, filename);
-        if (file.exists() && file.isFile()) {
-            if (file.delete()) {
-                // 파일 삭제 후 메모리 저장소를 최신 상태로 갱신
-                aiService.reloadCategory(category);
-                return "삭제 성공: " + filename;
-            } else {
-                return "삭제 실패: " + filename;
+
+        if (req == null || req.getFilename() == null) {
+            return "삭제 실패: filename이 없습니다.";
+        }
+
+        String filename = req.getFilename();
+        String category = req.getCategory();
+
+        try {
+            SecurityPathUtil.validateSafeCategory(category);
+            SecurityPathUtil.validateSafeFilename(filename);
+
+            Path basePath = (category == null || category.isBlank())
+                    ? Paths.get(FILE_DIR)
+                    : Paths.get(FILE_DIR, category);
+
+            Path targetPath = SecurityPathUtil.safeResolve(basePath, filename);
+
+            if (!Files.exists(targetPath) || !Files.isRegularFile(targetPath)) {
+                return "파일이 존재하지 않습니다: " + filename;
             }
-        } else {
-            return "파일이 존재하지 않습니다: " + filename;
+
+            Files.delete(targetPath);
+
+            // 삭제 후 재로딩
+            aiService.reloadCategory(category);
+            return "삭제 성공: " + filename;
+
+        } catch (IllegalArgumentException e) {
+            return "삭제 실패: 요청 값이 올바르지 않습니다.";
+        } catch (IOException e) {
+            e.printStackTrace();
+            return "삭제 실패: " + e.getMessage();
         }
     }
 
