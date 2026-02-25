@@ -3,6 +3,8 @@ package com.example.cwmAi.Controller;
 import jakarta.servlet.http.Cookie;
 import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.ResponseCookie;
 import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
 import org.springframework.web.bind.annotation.ModelAttribute;
@@ -86,5 +88,34 @@ public class loginController {
         cookie.setMaxAge(0); // 쿠키 만료
         response.addCookie(cookie);
         return "redirect:/loginPage";
+    }
+
+    private void setAccessTokenCookie(HttpServletResponse response, String token) {
+        // 내부망이어도 HTTPS면 secure=true 권장
+        boolean secure = false; // HTTPS 적용 시 true로 바꿔야함.
+
+        ResponseCookie cookie = ResponseCookie.from("accessToken", token)
+                .httpOnly(true)
+                .secure(secure)
+                .path("/")
+                .sameSite("Lax")
+                .maxAge(60 * 60) // 1시간
+                .build();
+
+        response.addHeader(HttpHeaders.SET_COOKIE, cookie.toString());
+    }
+
+    private void clearAccessTokenCookie(HttpServletResponse response) {
+        boolean secure = false; // HTTPS 적용 시 true로 바꾸세요.
+
+        ResponseCookie cookie = ResponseCookie.from("accessToken", "")
+                .httpOnly(true)
+                .secure(secure)
+                .path("/")
+                .sameSite("Lax")
+                .maxAge(0)
+                .build();
+
+        response.addHeader(HttpHeaders.SET_COOKIE, cookie.toString());
     }
 }
