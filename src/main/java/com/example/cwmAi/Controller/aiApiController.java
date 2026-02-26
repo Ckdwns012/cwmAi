@@ -43,13 +43,17 @@ public class aiApiController {
             @RequestParam String question,
             @RequestParam(required = false) String category
     ) {
-        Optional<String> cached = semanticCacheService.findCachedAnswer(question, category);
-        if (cached.isPresent()) {
-            System.out.println("[캐시HIT] 즉시 반환: " + question.substring(0, Math.min(40, question.length())));
-            return Mono.just(Map.of("cached", true, "answer", cached.get()));
-        }
-        System.out.println("[캐시MISS] LLM 호출: " + question.substring(0, Math.min(40, question.length())));
-        return Mono.just(Map.of("cached", false));
+        // 요약된 키로 캐시 조회
+        return aiService.summarizeForCacheKey(question)
+                .map(cacheKey -> {
+                    Optional<String> cached = semanticCacheService.findCachedAnswer(cacheKey, category);
+                    if (cached.isPresent()) {
+                        System.out.println("[캐시HIT] 즉시 반환: " + question.substring(0, Math.min(40, question.length())));
+                        return Map.<String, Object>of("cached", true, "answer", cached.get());
+                    }
+                    System.out.println("[캐시MISS] LLM 호출: " + question.substring(0, Math.min(40, question.length())));
+                    return Map.<String, Object>of("cached", false, "cacheKey", cacheKey);
+                });
     }
 
     // 1단계: 관련 조항 추천 (POST)
@@ -76,12 +80,17 @@ public class aiApiController {
             @RequestBody java.util.List<String> recommendedTitles
     ) {
         return aiService.generateFinalAnswer(question, recommendedTitles, category)
-                .doOnSuccess(answer -> {
-                    if (answer != null && !answer.isBlank()) {
-                        semanticCacheService.cacheAnswer(question, answer, category);
-                        System.out.println("[캐시STORE] 저장: " + question.substring(0, Math.min(40, question.length())));
-                    }
-                });
+            .flatMap(answer -> {
+                if (answer != null && !answer.isBlank()) {
+                    // 저장할 때도 요약 키 사용
+                    return aiService.summarizeForCacheKey(question)
+                            .doOnNext(cacheKey -> {
+                                semanticCacheService.cacheAnswer(cacheKey, answer, category);
+                                System.out.println("[캐시STORE] 저장키: " + cacheKey);
+                            })
+                            .thenReturn(answer);
+                }
+                return Mono.just(answer);
+            });
     }
-
 }

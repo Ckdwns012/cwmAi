@@ -295,6 +295,54 @@ public class uploadController {
         }
     }
 
+    // 분야 삭제
+        @DeleteMapping("/api/categories")
+    @ResponseBody
+    public String deleteCategory(
+            @RequestParam String category,
+            HttpServletRequest request
+    ) {
+        String userId = (String) request.getAttribute("userId");
+        if (userId == null || !"admin".equals(userId)) {
+            return "권한이 없습니다. 관리자만 분야를 삭제할 수 있습니다.";
+        }
+
+        if (category == null || category.isBlank()) {
+            return "분야명을 입력해주세요.";
+        }
+
+        // 기본 카테고리는 삭제 불가
+        if (DEFAULT_CATEGORIES.contains(category.trim())) {
+            return "기본 분야는 삭제할 수 없습니다.";
+        }
+
+        try {
+            SecurityPathUtil.validateSafeCategory(category);
+
+            File categoryDir = new File(FILE_DIR, category.trim());
+            if (!categoryDir.exists()) {
+                return "존재하지 않는 분야입니다.";
+            }
+
+            // 파일이 있으면 삭제 거부 (안전)
+            File[] files = categoryDir.listFiles();
+            if (files != null && files.length > 0) {
+                return "분야 안에 파일이 있어 삭제할 수 없습니다. 먼저 파일을 모두 삭제해주세요.";
+            }
+
+            if (categoryDir.delete()) {
+                return "success";
+            } else {
+                return "삭제 실패: 디렉토리를 삭제할 수 없습니다.";
+            }
+        } catch (IllegalArgumentException e) {
+            return "삭제 실패: 잘못된 분야명입니다.";
+        } catch (Exception e) {
+            e.printStackTrace();
+            return "삭제 실패: " + e.getMessage();
+        }
+    }
+
     // [추가] JavaScript fetch API를 위한 JSON 반환 엔드포인트 (카테고리별)
     @GetMapping("/api/files")
     @ResponseBody // JSON 반환

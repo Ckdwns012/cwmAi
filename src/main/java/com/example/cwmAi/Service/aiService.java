@@ -317,31 +317,90 @@ public class aiService {
 //                    return generateFinalAnswer(userPrompt, recommendedTitles, category);
 //                });
 //    }
-    //   캐시 확인 → 캐시 히트 시 즉시 반환 → 미스 시 LLM 호출 후 캐시 저장
+    //  질문 요약 → 캐시 확인 → 캐시 히트 시 즉시 반환 → 미스 시 LLM 호출 후 캐시 저장
     public Mono<String> askModel(String userPrompt, String category) {
 
-        // ① 캐시에서 먼저 찾기 (동기 → Mono로 감싸기)
-        Optional<String> cached = semanticCacheService.findCachedAnswer(userPrompt, category);
-        if (cached.isPresent()) {
-            System.out.println("[캐시HIT] 즉시 반환: " + userPrompt.substring(0, Math.min(40, userPrompt.length())));
-            return Mono.just(cached.get());
-        }
+        // ① 질문 요약 → 캐시 키로 사용
+        return summarizeForCacheKey(userPrompt)
+            .flatMap(cacheKey -> {
+                    // ② 캐시 확인
+                    Optional<String> cached = semanticCacheService.findCachedAnswer(cacheKey, category);
+                    if (cached.isPresent()) {
+                        System.out.println("[캐시HIT] 즉시 반환: " + userPrompt.substring(0, Math.min(40, userPrompt.length())));
+                        return Mono.just(cached.get());
+                    }
 
-        // ② 캐시 미스 → 기존 2단계 LLM 호출
-        return recommendArticleTitles(userPrompt, category, null)
-                .flatMap(recommendedTitles -> {
-                    if (recommendedTitles == null || recommendedTitles.isEmpty()) {
-                        return Mono.just("해당 분야의 관련 조항을 찾을 수 없습니다. 보다 정확한 법률 용어로 다시 질문해주세요.");
-                    }
-                    return generateFinalAnswer(userPrompt, recommendedTitles, category);
-                })
-                .doOnSuccess(answer -> {
-                    // ③ LLM 답변을 캐시에 저장 (비동기로 side-effect 처리)
-                    if (answer != null && !answer.isBlank()) {
-                        semanticCacheService.cacheAnswer(userPrompt, answer, category);
-                    }
+                    // ③ 캐시 미스 → 기존 2단계 LLM 호출
+                    return recommendArticleTitles(userPrompt, category, null)
+                        .flatMap(recommendedTitles -> {
+                            if (recommendedTitles == null || recommendedTitles.isEmpty()) {
+                                return Mono.just("해당 분야의 관련 조항을 찾을 수 없습니다. 보다 정확한 법률 용어로 다시 질문해주세요.");
+                            }
+                            return generateFinalAnswer(userPrompt, recommendedTitles, category);
+                        })
+                        .doOnSuccess(answer -> {
+                            if (answer != null && !answer.isBlank()) {
+                                // ④ 요약된 키로 캐시 저장 (비동기로 side-effect 처리)
+                                semanticCacheService.cacheAnswer(cacheKey, answer, category);
+                            }
+                        });
                 });
     }
+
+    /** 질문을 핵심 키워드 한 줄로 요약 */
+    public Mono<String> summarizeForCacheKey(String question) {
+        List<messageDTO> messages = List.of(
+            new messageDTO("system",
+                "너는 검색 및 캐시 키 생성을 위한 키워드 추출기다.\n" +
+                "아래 질문에서 '핵심 명사/명사구'만 추출하여 한 줄로 출력해라.\n\n" +
+
+                "[출력 형식]\n" +
+                "1. 반드시 한 줄만 출력\n" +
+                "2. 2개 이상 8개 이하 키워드만 공백으로 구분\n" +
+                "3. 다른 설명, 기호, 접두어(핵심어:, 결과:, 출력:) 절대 금지\n\n" +
+
+                "[포함 규칙]\n" +
+                "- 질문의 핵심 대상, 행위, 산출물 위주의 명사만 남긴다.\n" +
+                "- 복합명사는 가능한 한 붙여서 출력 가능 (예: 보안적합성검증, 개인정보처리방침)\n" +
+                "- 문서명은 줄이지 말고 그대로 유지\n\n" +
+
+                "[제거 규칙 – 절대 포함 금지]\n" +
+                "1. 의문사/질문형 표현: 어떤, 무엇, 뭐, 몇, 어떻게, 왜, 어디, 언제, 누가,\n" +
+                "   있어, 있나요, 있나, 인가, 인가요, 알려줘, 알려주세요, 말해줘\n" +
+                "2. 조사/어미/접속사: 을, 를, 이, 가, 은, 는, 에서, 의, 에, 로, 으로, 과, 와, 및, 또는, 그리고\n" +
+                "3. 의미가 약한 일반어: 것, 거, 수, 등, 관련, 내용, 사항, 경우\n\n" +
+
+                "[검증 규칙]\n" +
+                "- 최종 출력에 위 금지어가 하나라도 포함되면 제거 후 다시 구성한다.\n" +
+                "- 질문형 단어로 끝나면 실패로 간주하고 다시 구성한다.\n"
+            ),
+            new messageDTO("user",
+                "질문: " + question + "\n키워드:"
+            )
+        );
+
+        return webClient.post()
+            .uri("/chat")
+            .bodyValue(new ChatRequest(MODEL_NAME, messages))
+            .retrieve()
+            .bodyToMono(String.class)
+            .map(raw -> {
+                try {
+                    responseDTO res = objectMapper.readValue(raw, responseDTO.class);
+                    String key = res.getContent().trim()
+                            .replaceAll("\\s+", " ")
+                            .replaceAll("^(핵심어|결과|출력)[:：]\\s*", "")
+                            .replaceAll("\\s*(란|항목|칸)\\s*", "$1");
+                    System.out.println("[CacheKey] 원본: " + question);
+                    System.out.println("[CacheKey] 요약: " + key);
+                    return key;
+                } catch (Exception e) {
+                    return question; // 실패 시 원본 질문 사용
+                }
+            })
+            .onErrorReturn(question);
+    }
+
 
     /**
      * 단계별 상태를 SSE로 전달하는 메서드

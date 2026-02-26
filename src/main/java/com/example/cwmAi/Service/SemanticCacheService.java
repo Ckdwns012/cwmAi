@@ -28,7 +28,7 @@ public class SemanticCacheService {
 
     // ── 설정값 ──────────────────────────────────────────────────
     /** 캐시 히트 기준 코사인 유사도 (0.90 이상이면 동일 질문으로 간주) */
-    private static final float SIMILARITY_THRESHOLD = 0.78f;
+    private static final float SIMILARITY_THRESHOLD = 0.95f;
 
     /** 캐시 TTL: 30일 (초 단위) */
     private static final long TTL_SECONDS = 30L * 24 * 60 * 60;

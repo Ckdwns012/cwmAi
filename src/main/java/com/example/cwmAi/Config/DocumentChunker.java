@@ -67,7 +67,7 @@ public class DocumentChunker {
         // 실제 조항 시작 패턴: 줄 시작에 "제 숫자조" 또는 "제 숫자조의숫자" 형태
         // 단, 법률 참조가 아닌 실제 조항 시작만 매칭
         Pattern articlePattern =
-                Pattern.compile("(?m)^\\s*제\\s*(\\d+)(?:조(?:의\\s*\\d+)?)?\\s*(?:\\(([^)]+)\\))?");
+            Pattern.compile("(?m)^\\s*제\\s*(\\d+)조(?:의\\s*\\d+)?\\s*(?:[\\(（]([^)）]+)[\\)）])?");
         Matcher articleMatcher = articlePattern.matcher(text);
 
         List<Integer> articlePositions = new ArrayList<>();
@@ -192,6 +192,16 @@ public class DocumentChunker {
         System.out.println();
         return chunks;
     }
+
+    private static final Pattern REF_AFTER = Pattern.compile(
+            "^(?:"
+        + "을|를|에|의"                       // 조사
+        + "|에\\s*따르면|에\\s*따라"          // ~에 따르면/따라
+        + "|에\\s*의하여|에\\s*의한"          // ~에 의하여/의한
+        + "|를\\s*참고"                       // ~를 참고
+        + "|제\\s*\\d+\\s*항"                 // 제X항
+        + ")"
+    );
     
     /**
      * 법률 참조 패턴인지 확인
@@ -201,10 +211,6 @@ public class DocumentChunker {
      * @return 참조 패턴이면 true, 실제 조항 시작이면 false
      */
     private boolean isLawReference(String context, int matchPosition, String matchedText) {
-        // 매칭 텍스트 앞부분 확인
-        String before = context.substring(0, matchPosition);
-        String after = context.substring(matchPosition + matchedText.length());
-        
         // 실제 조항 시작의 특징:
         // 1. 줄 시작에 위치 (앞에 줄바꿈이 있거나 텍스트 시작)
         // 2. 앞에 다른 조항 참조가 없음
@@ -213,46 +219,28 @@ public class DocumentChunker {
         // 1. 문장 중간에 위치 (앞에 다른 텍스트가 있음)
         // 2. 뒤에 조사나 참조 키워드가 옴 (을, 를, 에, 의, 제X항 등)
         
-        // 앞부분이 비어있거나 줄바꿈으로 끝나면 실제 조항일 가능성 높음
-        String beforeTrimmed = before.trim();
-        if (beforeTrimmed.isEmpty() || beforeTrimmed.endsWith("\n") || 
-            before.matches(".*\\n\\s*$")) {
-            // 뒷부분 확인: 조사나 참조 키워드가 바로 오면 참조
-            String afterTrimmed = after.trim();
-            if (afterTrimmed.matches("^(?:을|를|에|의|에\\s*따르면|를\\s*참고|에\\s*따라|에\\s*의하여|에\\s*의한|제\\s*\\d+항).*")) {
-                return true;
-            }
-            // 실제 조항으로 판단
-            return false;
-        }
-        
-        // 앞부분에 다른 조항 참조가 있으면 참조로 판단
-        // "제X조를", "제X조제X항", "제X조에 따르면" 등의 패턴
-        Pattern referenceBeforePattern = Pattern.compile(
-            "제\\s*\\d+(?:조(?:의\\s*\\d+)?)?(?:제\\s*\\d+항)?(?:을|를|에|의|에\\s*따르면|를\\s*참고|에\\s*따라|에\\s*의하여|에\\s*의한|및|와|과)"
-        );
-        if (referenceBeforePattern.matcher(beforeTrimmed).find()) {
+        if (context == null || matchedText == null) return false;
+        if (matchPosition < 0 || matchPosition + matchedText.length() > context.length()) return false;
+
+        String before = context.substring(0, matchPosition);
+        String after  = context.substring(matchPosition + matchedText.length());
+
+        // 마지막 줄바꿈 이후 앞쪽이 공백만 있으면 "줄 시작"으로 판별
+        // \r\n, \n 혼용 방어를 위해 마지막 \n 기준으로 구분
+        int lastNl = before.lastIndexOf('\n');
+        String sinceLineStart = (lastNl >= 0) ? before.substring(lastNl + 1) : before;
+
+        boolean startsLine = sinceLineStart.strip().isEmpty();
+
+        // 줄 시작이 아니면 기본적으로 문장 중간의 "제X조"는 참조로 판단
+        if (!startsLine) {
             return true;
         }
-        
-        // 뒷부분에 참조 키워드가 있으면 참조로 판단
-        String afterTrimmed = after.trim();
-        if (afterTrimmed.matches("^(?:을|를|에|의|에\\s*따르면|를\\s*참고|에\\s*따라|에\\s*의하여|에\\s*의한|제\\s*\\d+항).*")) {
-            return true;
-        }
-        
-        // 문장 중간에 있고 앞뒤에 일반 텍스트가 있으면 참조일 가능성 높음
-        if (!beforeTrimmed.isEmpty() && !afterTrimmed.isEmpty() && 
-            !beforeTrimmed.endsWith("\n") && !afterTrimmed.startsWith("\n")) {
-            // 앞에 조항 번호가 있고 뒤에 조사가 오면 참조
-            if (beforeTrimmed.matches(".*제\\s*\\d+(?:조(?:의\\s*\\d+)?)?$") && 
-                afterTrimmed.matches("^(?:을|를|에|의|제\\s*\\d+항).*")) {
-                return true;
-            }
-        }
-        
-        // 기본적으로 실제 조항으로 판단
-        return false;
+
+        // 줄 시작이라도 뒤에 조사가 바로 붙으면 참조
+        // "제5조를", "제3조에 따라", "제10조 제2항"
+        String afterTrimmed = after.stripLeading();
+        return REF_AFTER.matcher(afterTrimmed).find();
     }
     
     /**
