@@ -34,15 +34,14 @@ public class DocumentChunker {
         List<chunkDTO> chunks = new ArrayList<>();
 
         /* =========================
-           0. 법령명 추출 (법/시행령/규칙/규정/지침)
+           0. 법령명 추출 & 청크 유형 판별
            ========================= */
-        String lawName = extractLawName(fileName);
-        // 0226 김소연(수정): 법령명 추출 실패 시 파일명(확장자 제거)을 법령명으로 사용
-        // 이유: 업무매뉴얼처럼 법령 형식이 아닌 문서도 청킹 가능하도록
-        if ("알 수 없음".equals(lawName)) {
-            lawName = fileName.replaceAll("\\.[^.]+$", "").trim();
-        }
-        System.out.println("추출된 법령명: " + lawName);
+        String rawLawName = extractLawName(fileName);
+        // 법령 패턴 미매칭 → 업무매뉴얼 등 비법령 문서
+        boolean isManual = "알 수 없음".equals(rawLawName);
+        String lawName = isManual ? fileName.replaceAll("\\.[^.]+$", "").trim() : rawLawName;
+        String chunkType = isManual ? "MANUAL" : "LAW";
+        System.out.println("추출된 법령명: " + lawName + " (유형: " + chunkType + ")");
 
         /* =========================
            1. 장 제목 추출 (번호 제거)
@@ -118,7 +117,8 @@ public class DocumentChunker {
         // 이유: 업무매뉴얼은 조항 포함 + 목차 단위 내용이 공존 → 둘 다 청킹 필요
         List<chunkDTO> tocChunks = chunkByTableOfContents(fileName, text, category, lawName);
         if (!tocChunks.isEmpty()) {
-            System.out.println("[청킹] 목차 청크 " + tocChunks.size() + "개 추가");
+            tocChunks.forEach(c -> c.setChunkType(chunkType));
+            System.out.println("[청킹] 목차 청크 " + tocChunks.size() + "개 추가 (유형: " + chunkType + ")");
             chunks.addAll(tocChunks);
         }
 
@@ -193,6 +193,7 @@ public class DocumentChunker {
                     i,                       // chunk index
                     category                 // 카테고리
             );
+            dto.setChunkType(chunkType);
             chunks.add(dto);
 
             // 생성된 청크 정보 로그 (디버깅용)

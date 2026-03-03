@@ -29,6 +29,7 @@ import java.nio.file.Paths;
 import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 @Service("aiService")
@@ -351,13 +352,13 @@ public class aiService {
             return Mono.just(cached.get());
         }
 
-        // ② 벡터+키워드 top-50 필터링 (LLM 호출 없음, ms 단위)
+        // ② LAW top-10 + MANUAL top-10 분리 벡터 검색 (LLM 없음, ms 단위)
         List<chunkDTO> filteredChunks = filterChunksByVectorAndKeyword(userPrompt, category);
         if (filteredChunks.isEmpty()) {
             return Mono.just("해당 분야의 관련 내용을 찾을 수 없습니다. 다른 키워드로 다시 질문해주세요.");
         }
 
-        // ③ 필터링된 청크 기준 LLM 1단계 → 2단계
+        // ③ 필터링된 최대 20개 청크 → LLM1(조항 선택) → LLM2(답변 생성)
         // /ask 단일 엔드포인트는 O/X 피드백 없이 자동 pending → 즉시 approve 처리
         return recommendArticleTitlesFromChunks(userPrompt, filteredChunks)
                 .flatMap(recommendedTitles -> {
@@ -389,7 +390,7 @@ public class aiService {
         Mono<aiResponseDTO> stage1Start = Mono.just(
                 new aiResponseDTO("stage1", "관련 조항을 찾는 중입니다...", null, null));
 
-        // 벡터+키워드 top-50 필터링
+        // LAW top-10 + MANUAL top-10 분리 벡터 검색 → 최대 20개
         List<chunkDTO> filteredChunks = filterChunksByVectorAndKeyword(userPrompt, category);
         if (filteredChunks.isEmpty()) {
             return Flux.just(
@@ -427,146 +428,52 @@ public class aiService {
      * @param fileNames 선택된 파일명 리스트 (null이면 모든 파일)
      * @return 추천받은 조항 이름 리스트 (3~10개)
      */
+    /**
+     * 1단계: LAW top-10 + MANUAL top-10 벡터 검색 후 LLM1에 최대 20개 제목만 전달
+     * 기존(전체 조항 수백 개 → LLM1) 대비 입력 토큰 1/10~1/20 절감 → 응답 속도 향상
+     * fileNames 필터 지원
+     */
     public Mono<List<String>> recommendArticleTitles(String userPrompt, String category, List<String> fileNames) {
-        // 선택된 파일의 청크에서만 조항 이름 추출
-        Map<String, String> articleTitleToChunkId = vectorStore.getArticleTitlesByCategoryAndFiles(category, fileNames);
+        System.out.printf("[1단계] LAW/MANUAL 분리 벡터 검색 시작 - 카테고리: %s%n", category);
 
-        if (articleTitleToChunkId.isEmpty()) {
-            System.out.println("[1단계] 해당 카테고리의 조항 이름이 없습니다: " + category);
-            if (fileNames != null && !fileNames.isEmpty()) {
-                System.out.println("[1단계] 선택된 파일: " + fileNames);
-            }
+        // LAW / MANUAL 각각 top-10 검색
+        List<chunkDTO> lawChunks    = filterChunksByType(userPrompt, category, "LAW");
+        List<chunkDTO> manualChunks = filterChunksByType(userPrompt, category, "MANUAL");
+
+        // fileNames 필터 적용
+        if (fileNames != null && !fileNames.isEmpty()) {
+            Set<String> fileSet = new HashSet<>(fileNames);
+            lawChunks    = lawChunks.stream()
+                    .filter(c -> fileSet.contains(c.getFileName()))
+                    .collect(Collectors.toList());
+            manualChunks = manualChunks.stream()
+                    .filter(c -> fileSet.contains(c.getFileName()))
+                    .collect(Collectors.toList());
+        }
+
+        // 병합 (MANUAL 우선 — 업무매뉴얼이 있으면 앞쪽에, 중복 제거)
+        List<chunkDTO> combined = new ArrayList<>();
+        combined.addAll(manualChunks);
+        Set<String> addedIds = new LinkedHashSet<>();
+        for (chunkDTO c : manualChunks) {
+            String key = c.getChunkId() != null ? c.getChunkId() : c.getFileName() + "_" + c.getChunkIndex();
+            addedIds.add(key);
+        }
+        for (chunkDTO c : lawChunks) {
+            String key = c.getChunkId() != null ? c.getChunkId() : c.getFileName() + "_" + c.getChunkIndex();
+            if (addedIds.add(key)) combined.add(c);
+        }
+
+        System.out.printf("[1단계] 벡터 필터 - LAW:%d MANUAL:%d → 합계 %d개 → LLM1 전달%n",
+                lawChunks.size(), manualChunks.size(), combined.size());
+
+        if (combined.isEmpty()) {
+            System.out.println("[1단계] 관련 청크 없음");
             return Mono.just(new ArrayList<>());
         }
 
-        // 조항 이름 목록을 문자열로 변환
-        List<String> articleTitles = new ArrayList<>(articleTitleToChunkId.keySet());
-        StringBuilder articleTitlesText = new StringBuilder();
-        for (int i = 0; i < articleTitles.size(); i++) {
-            articleTitlesText.append((i + 1)).append(". ").append(articleTitles.get(i));
-            if (i < articleTitles.size() - 1) {
-                articleTitlesText.append("\n");
-            }
-        }
-
-        List<messageDTO> messages = new ArrayList<>();
-
-        // 시스템 메시지
-        messages.add(new messageDTO(
-                "system",
-                """
-                너는 법령 조항을 분석하는 전문가다.
-                사용자의 질문과 관련된 조항 이름을 관련도가 높은 순으로 2개에서 7개 사이로 추천해야 한다.
-                
-                중요 규칙:
-                1. 반드시 JSON 배열 형식으로만 답변한다. 예: ["조항이름1", "조항이름2", "조항이름3"]
-                2. 다른 설명이나 텍스트는 절대 포함하지 않는다.
-                3. 조항 이름은 제공된 목록에서 정확히 선택해야 한다.
-                4. 2개 이상 7개 이하로 추천한다.
-                5. 한글로만 답변한다.
-                6. 금액, 수치, 법령 조문 번호는 원문 그대로 유지한다.
-                """
-        ));
-
-        // 유저 메시지: 질문 + 조항 이름 목록
-        String userMessage = String.format(
-                "사용자 질문: %s\n\n" +
-                        "다음은 해당 분야의 모든 조항 이름 목록입니다:\n%s\n\n" +
-                        "질문에 나온 단어가 조항이름에 있으면 꼭 추천하세요.\n" +
-                        "위 질문과 가장 관련이 높은 조항 이름을 2개에서 7개 사이로 선택하여 JSON 배열 형식으로만 답변하세요.\n" +
-                        "예시: [\"조항이름1\", \"조항이름2\", \"조항이름3\"]",
-                userPrompt,
-                articleTitlesText.toString()
-        );
-
-        messages.add(new messageDTO("user", userMessage));
-
-        ChatRequest requestBody = new ChatRequest(MODEL_NAME, messages);
-
-        // 1단계 요청 상세 로그
-        System.out.println("========================================");
-        System.out.println("===== [1단계] 조항 이름 추천 요청 =====");
-        System.out.println("========================================");
-        System.out.println("카테고리: " + (category != null ? category : "전체"));
-        if (fileNames != null && !fileNames.isEmpty()) {
-            System.out.println("선택된 파일: " + fileNames);
-        } else {
-            System.out.println("선택된 파일: 전체 파일");
-        }
-        System.out.println("전체 조항 이름 수: " + articleTitles.size());
-        System.out.println("\n--- [1단계] AI 요청 내용 ---");
-        System.out.println("URL: " + OLLAMA_BASE_URL + "/chat");
-        System.out.println("Model: " + MODEL_NAME);
-        System.out.println("\n[System 메시지]");
-        System.out.println(messages.get(0).getContent());
-        System.out.println("\n[User 메시지]");
-        System.out.println(messages.get(1).getContent());
-        System.out.println("========================================\n");
-
-        return webClient.post()
-                .uri("/chat")
-                .header("Content-Type", "application/json")
-                .bodyValue(requestBody)
-                .retrieve()
-                .bodyToMono(String.class)
-                .map(rawResponse -> {
-                    // 1단계 응답 상세 로그
-                    System.out.println("========================================");
-                    System.out.println("===== [1단계] Ollama API 원본 응답 =====");
-                    System.out.println("========================================");
-                    System.out.println(rawResponse);
-                    System.out.println("========================================\n");
-
-                    try {
-                        com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
-                        responseDTO response = mapper.readValue(rawResponse, responseDTO.class);
-
-                        if (response == null || response.getMessage() == null) {
-                            System.err.println("[1단계] 응답 파싱 실패");
-                            return new ArrayList<String>();
-                        }
-
-                        String content = response.getContent();
-                        if (content == null || content.trim().isEmpty()) {
-                            System.err.println("[1단계] content가 비어있음");
-                            return new ArrayList<String>();
-                        }
-
-                        System.out.println("--- [1단계] 추출된 content ---");
-                        System.out.println(content);
-                        System.out.println("==============================\n");
-
-                        // JSON 배열 파싱
-                        // 응답에서 JSON 배열 부분만 추출 (앞뒤 불필요한 텍스트 제거)
-                        String jsonArray = content.trim();
-                        // 대괄호로 시작하고 끝나는 부분만 추출
-                        int startIdx = jsonArray.indexOf('[');
-                        int endIdx = jsonArray.lastIndexOf(']');
-                        if (startIdx >= 0 && endIdx > startIdx) {
-                            jsonArray = jsonArray.substring(startIdx, endIdx + 1);
-                        }
-
-                        @SuppressWarnings("unchecked")
-                        List<String> recommendedTitles = mapper.readValue(jsonArray, List.class);
-
-                        System.out.println("--- [1단계] 파싱 결과 ---");
-                        System.out.println("추천받은 조항 이름 수: " + recommendedTitles.size());
-                        System.out.println("추천받은 조항 이름: " + recommendedTitles);
-                        System.out.println("==============================\n");
-
-                        return recommendedTitles;
-                    } catch (Exception e) {
-                        System.err.println("[1단계] JSON 파싱 오류: " + e.getMessage());
-                        System.err.println("[1단계] 원본 응답: " + rawResponse);
-                        e.printStackTrace();
-                        return new ArrayList<String>();
-                    }
-                })
-                .onErrorResume(e -> {
-                    System.err.println("[1단계] API 호출 오류: " + e.getMessage());
-                    e.printStackTrace();
-                    return Mono.just(new ArrayList<String>());
-                });
+        // 기존 LLM1 호출 (입력이 최대 20개로 축소됨)
+        return recommendArticleTitlesFromChunks(userPrompt, combined);
     }
     private String extractCaptionFromChunks(List<chunkDTO> chunks) {
         java.util.regex.Pattern pattern =
@@ -600,38 +507,53 @@ public class aiService {
         System.out.println("[2단계] 추천받은 조항 이름에 해당하는 청크 수: " + relevantChunks.size());
 
 
+        // 청크를 LAW / MANUAL 로 분리
+        List<chunkDTO> lawChunks = new ArrayList<>();
+        List<chunkDTO> manualChunks = new ArrayList<>();
+        for (chunkDTO c : relevantChunks) {
+            if ("MANUAL".equals(c.getChunkType())) manualChunks.add(c);
+            else lawChunks.add(c);
+        }
+        System.out.printf("[2단계] 청크 분류 - LAW:%d MANUAL:%d%n", lawChunks.size(), manualChunks.size());
+
         List<messageDTO> messages = new ArrayList<>();
 
-        // 시스템 메시지
+        // 시스템 메시지 (업무매뉴얼 우선 + 법령 보조)
         messages.add(new messageDTO(
                 "system",
                 """
-                너는 공공기관 법령 질의에 답변하는 실무 보조 AI다.
+                너는 공공기관 실무 보조 AI다.
                 다음 규칙을 반드시 지켜라:
                 1. 모든 답변은 반드시 한글로만 작성한다. 영어, 로마자, 기호는 사용하지 않는다.
-                2. 금액, 수치, 법령 조문 번호는 원문 그대로 유지한다.
-                3. 답변은 반드시 최대 10개 항목까지만 작성한다.
-                4. 불필요한 설명, 반복 문장, 유사 표현을 금지한다.
-                5. 각 항목은 2~3문장 이내로 간결하게 작성한다.
-                6. 법령 근거는 항목별이 아니라 답변 맨 마지막에 한 번만 제시한다.
-                7. 근거 형식은 반드시 "[근거: 법령명 제○조]" 같이 작성한다.
+                2. 업무매뉴얼 내용이 있으면 실무 절차를 먼저 설명하고, 법령 근거는 보조로 제시한다.
+                3. 법령 근거는 답변 맨 마지막에 한 번만 "[근거: 법령명 제○조]" 형식으로 작성한다.
+                4. 금액, 수치, 법령 조문 번호는 원문 그대로 유지한다.
+                5. 답변은 최대 10개 항목, 각 항목 2~3문장 이내로 간결하게 작성한다.
+                6. 불필요한 설명, 반복 문장, 유사 표현을 금지한다.
                 """
         ));
 
-        // 유저 메시지: 청크 내용 + 사용자 질문
+        // 유저 메시지: 업무매뉴얼 섹션 → 법령 섹션 순서로 컨텍스트 구성
         StringBuilder contextBuilder = new StringBuilder();
-        contextBuilder.append("다음 법령 조문을 참고하여 질문에 한글로만 답변해주세요. 절대 영어를 사용하지 마세요:\n\n");
-        for (chunkDTO chunk : relevantChunks) {
-            contextBuilder
-                    .append("【")
-                    .append(chunk.getLawName())
-                    .append(" ")
-                    .append(chunk.getArticleNumber())
-                    .append(" ")
-                    .append(chunk.getArticleTitle())
-                    .append("】\n")
-                    .append(chunk.getText())
-                    .append("\n\n");
+        contextBuilder.append("다음 자료를 참고하여 질문에 한글로만 답변해주세요:\n\n");
+
+        if (!manualChunks.isEmpty()) {
+            contextBuilder.append("=== 업무매뉴얼 ===\n");
+            for (chunkDTO chunk : manualChunks) {
+                contextBuilder.append("【").append(chunk.getLawName())
+                        .append(" - ").append(chunk.getArticleTitle()).append("】\n")
+                        .append(chunk.getText()).append("\n\n");
+            }
+        }
+
+        if (!lawChunks.isEmpty()) {
+            contextBuilder.append("=== 관련 법령·조항 ===\n");
+            for (chunkDTO chunk : lawChunks) {
+                contextBuilder.append("【").append(chunk.getLawName())
+                        .append(" ").append(chunk.getArticleNumber())
+                        .append(" ").append(chunk.getArticleTitle()).append("】\n")
+                        .append(chunk.getText()).append("\n\n");
+            }
         }
         // 0224 김소연(수정): B안 - 질문 시점에 표 1개만 선택해 컨텍스트에 추가
         // 이유: 표를 청크에 미리 병합하지 않고, 질문과 관련성이 높은 표만 최소 비용으로 붙이기 위함
@@ -1069,40 +991,66 @@ public class aiService {
     // 0226 김소연(수정): 벡터+키워드 하이브리드 top-50 필터링
     // 이유: 전체 조항 목록 → LLM 방식 대신 유사도+키워드로 관련 청크 선별
     //       유사도 0.85 이상 우선, 결과 3개 미만이면 top-3 강제 반환(빈 결과 방지)
-    private List<chunkDTO> filterChunksByVectorAndKeyword(String question, String category) {
-        // 1) 벡터 유사도 0.85 이상 top-50
-        List<chunkDTO> vectorResults = vectorStore.searchByVector(question, 50, category);
+    /**
+     * chunkType("LAW" | "MANUAL") 별 하이브리드 검색 (벡터 + 키워드)
+     * - LAW : 유사도 임계값 0.80
+     * - MANUAL: 유사도 임계값 0.70 (구어체 표현 커버)
+     * LLM 호출 없음 → ms 단위 응답
+     */
+    private List<chunkDTO> filterChunksByType(String question, String category, String chunkType) {
+        float threshold = "MANUAL".equals(chunkType) ? 0.70f : 0.80f;
 
-        // 2) 키워드 매칭 (2자 이상 단어)
+        // 1) 벡터 검색 (유형 필터 + 임계값)
+        List<chunkDTO> vectorResults = vectorStore.searchByVector(question, 10, category, chunkType, threshold);
+
+        // 2) 키워드 보완 검색
         Set<String> keywords = extractKeywords(question);
         List<chunkDTO> keywordResults = new ArrayList<>();
         if (!keywords.isEmpty()) {
             for (chunkDTO c : vectorStore.getChunksByCategory(category)) {
+                String ct = c.getChunkType() != null ? c.getChunkType() : "LAW";
+                if (!chunkType.equals(ct)) continue;
                 String target = (c.getArticleTitle() != null ? c.getArticleTitle() : "")
                         + " " + (c.getText() != null
-                        ? c.getText().substring(0, Math.min(200, c.getText().length())) : "");
+                        ? c.getText().substring(0, Math.min(300, c.getText().length())) : "");
                 for (String kw : keywords) {
                     if (target.contains(kw)) { keywordResults.add(c); break; }
                 }
             }
         }
 
-        // 3) 합집합 (중복 제거)
+        // 3) 합집합 (중복 제거, chunkId null 방어)
         Map<String, chunkDTO> merged = new LinkedHashMap<>();
-        for (chunkDTO c : vectorResults) merged.put(c.getChunkId(), c);
-        for (chunkDTO c : keywordResults) merged.putIfAbsent(c.getChunkId(), c);
-        List<chunkDTO> result = new ArrayList<>(merged.values());
-
-        // 4) 3개 미만이면 top-3 강제 반환
-        if (result.size() < 3) {
-            System.out.println("[필터링] 결과 부족(" + result.size() + "개) → top-3 강제 반환");
-            List<chunkDTO> forced = vectorStore.searchByVector(question, 3, category);
-            return forced.isEmpty() ? result : forced;
+        for (chunkDTO c : vectorResults) {
+            String key = c.getChunkId() != null ? c.getChunkId() : c.getFileName() + "_" + c.getChunkIndex();
+            merged.put(key, c);
+        }
+        for (chunkDTO c : keywordResults) {
+            String key = c.getChunkId() != null ? c.getChunkId() : c.getFileName() + "_" + c.getChunkIndex();
+            merged.putIfAbsent(key, c);
         }
 
-        if (result.size() > 50) result = result.subList(0, 50);
-        System.out.println("[필터링] 벡터+키워드 결과: " + result.size() + "개 청크");
+        List<chunkDTO> result = new ArrayList<>(merged.values());
+        if (result.size() > 10) result = result.subList(0, 10);
+        System.out.printf("[%s검색] 벡터%d + 키워드 → %d개 청크%n",
+                chunkType, vectorResults.size(), result.size());
         return result;
+    }
+
+    // 하위 호환 유지 (askModel, askModelWithStages 내부에서 사용)
+    private List<chunkDTO> filterChunksByVectorAndKeyword(String question, String category) {
+        List<chunkDTO> lawChunks    = filterChunksByType(question, category, "LAW");
+        List<chunkDTO> manualChunks = filterChunksByType(question, category, "MANUAL");
+        Map<String, chunkDTO> merged = new LinkedHashMap<>();
+        for (chunkDTO c : lawChunks) {
+            String key = c.getChunkId() != null ? c.getChunkId() : c.getFileName() + "_" + c.getChunkIndex();
+            merged.put(key, c);
+        }
+        for (chunkDTO c : manualChunks) {
+            String key = c.getChunkId() != null ? c.getChunkId() : c.getFileName() + "_" + c.getChunkIndex();
+            merged.putIfAbsent(key, c);
+        }
+        return new ArrayList<>(merged.values());
     }
 
     // 키워드 추출 (2자 이상, 불용어 제외)

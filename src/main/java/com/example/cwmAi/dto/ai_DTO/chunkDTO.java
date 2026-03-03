@@ -33,6 +33,11 @@ public class chunkDTO {
     public float[] getEmbedding() { return embedding; }
     public void setEmbedding(float[] embedding) { this.embedding = embedding; }
 
+    /** 청크 유형: "LAW"(법령·조항) | "MANUAL"(업무매뉴얼), null이면 "LAW"로 간주 */
+    private String chunkType;
+    public String getChunkType() { return chunkType; }
+    public void setChunkType(String chunkType) { this.chunkType = chunkType; }
+
     public chunkDTO(
             String lawName,
             String chapterTitle,

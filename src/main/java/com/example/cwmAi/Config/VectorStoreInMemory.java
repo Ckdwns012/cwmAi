@@ -365,22 +365,34 @@ public class VectorStoreInMemory {
 
     // 벡터 유사도 top-K 검색 (유사도 0.85 이상, 카테고리 필터)
     public List<chunkDTO> searchByVector(String question, int topK, String category) {
+        return searchByVector(question, topK, category, null, 0.85f);
+    }
+
+    /**
+     * chunkType + minSimilarity 파라미터 오버로드
+     * @param chunkType "LAW" | "MANUAL" | null(전체)
+     * @param minSimilarity 코사인 유사도 최소값 (LAW: 0.80, MANUAL: 0.70 권장)
+     */
+    public List<chunkDTO> searchByVector(String question, int topK, String category,
+                                         String chunkType, float minSimilarity) {
         if (question == null || question.isBlank()) return Collections.emptyList();
         try {
             float[] qVec = embeddingModel.embed(TextSegment.from(question)).content().vector();
             String cat = normalizeCategory(category);
+            String type = (chunkType == null || chunkType.isBlank()) ? "" : chunkType.trim();
             rwLock.readLock().lock();
             try {
-                List<chunkDTO> filtered = store.stream()
+                return store.stream()
                         .filter(c -> cat.isEmpty() || normalizeCategory(c.getCategory()).equals(cat))
+                        .filter(c -> type.isEmpty() || type.equals(
+                                c.getChunkType() != null ? c.getChunkType() : "LAW"))
                         .filter(c -> c.getEmbedding() != null)
                         .map(c -> new AbstractMap.SimpleEntry<>(c, cosine(qVec, c.getEmbedding())))
-                        .filter(e -> e.getValue() >= 0.85f)
+                        .filter(e -> e.getValue() >= minSimilarity)
                         .sorted((a, b) -> Float.compare(b.getValue(), a.getValue()))
                         .limit(topK)
                         .map(Map.Entry::getKey)
                         .collect(Collectors.toList());
-                return filtered;
             } finally {
                 rwLock.readLock().unlock();
             }
