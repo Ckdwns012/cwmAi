@@ -358,6 +358,7 @@ public class aiService {
         }
 
         // ③ 필터링된 청크 기준 LLM 1단계 → 2단계
+        // /ask 단일 엔드포인트는 O/X 피드백 없이 자동 pending → 즉시 approve 처리
         return recommendArticleTitlesFromChunks(userPrompt, filteredChunks)
                 .flatMap(recommendedTitles -> {
                     if (recommendedTitles == null || recommendedTitles.isEmpty()) {
@@ -367,7 +368,9 @@ public class aiService {
                 })
                 .doOnSuccess(answer -> {
                     if (answer != null && !answer.isBlank()) {
-                        semanticCacheService.cacheAnswer(userPrompt, answer, category);
+                        // /ask 엔드포인트는 피드백 UI 없이 직접 호출되므로 pending→approve 즉시 처리
+                        String pendingKey = semanticCacheService.cachePending(userPrompt, answer, category);
+                        if (pendingKey != null) semanticCacheService.approvePending(pendingKey);
                     }
                 });
     }

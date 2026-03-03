@@ -8,20 +8,20 @@ import com.example.cwmAi.Service.aiService;
 
 import reactor.core.publisher.Mono;
 
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Optional;
 
-@RestController // 데이터 반환 전용 컨트롤러
-@RequestMapping("/lm/api") // API 요청 경로는 /lm/api/...
+@RestController
+@RequestMapping("/lm/api")
 public class aiApiController {
 
     private final aiService aiService;
-    private final SemanticCacheService semanticCacheService; // 0224 김소연(수정) - 시맨틱캐싱
+    private final SemanticCacheService semanticCacheService;
 
-    public aiApiController(aiService aiService, SemanticCacheService semanticCacheService ) {
+    public aiApiController(aiService aiService, SemanticCacheService semanticCacheService) {
         this.aiService = aiService;
         this.semanticCacheService = semanticCacheService;
-
     }
 
     // AI 응답 요청 (POST) - 카테고리별 질문
@@ -30,14 +30,12 @@ public class aiApiController {
             @RequestParam String question,
             @RequestParam(required = false) String category
     ) {
-        // aiService의 비동기 작업(Mono<String>)을 그대로 반환합니다.
-        // Spring WebFlux가 Mono의 완료 시점에 맞춰 비동기적으로 HTTP 응답을 처리합니다.
         return aiService.askModel(question, category);
     }
 
-    // 0224 김소연(수정) 캐시 확인 전용 엔드포인트
-    // cached: true  → answer 필드 반환 → 프론트 즉시 표시
-    // cached: false → 기존 stage1 → stage2 진행
+    // 캐시 확인 전용 엔드포인트
+    // cached: true  → answer 필드 반환 → 프론트 즉시 표시 (O/X 없음, 이미 검증된 캐시)
+    // cached: false → stage1 → stage2 진행
     @PostMapping("/ask/cache-check")
     public Mono<Map<String, Object>> checkCache(
             @RequestParam String question,
@@ -67,21 +65,50 @@ public class aiApiController {
         }
         return aiService.recommendArticleTitles(question, category, files);
     }
-    
+
     // 2단계: 최종 답변 생성 (POST)
+    // 변경: 자동 캐시 저장 제거 → pendingKey 반환 → 사용자 O/X 후 /feedback으로 결정
     @PostMapping("/ask/stage2")
-    public Mono<String> askStage2(
+    public Mono<Map<String, Object>> askStage2(
             @RequestParam String question,
             @RequestParam String category,
             @RequestBody java.util.List<String> recommendedTitles
     ) {
         return aiService.generateFinalAnswer(question, recommendedTitles, category)
-                .doOnSuccess(answer -> {
+                .map(answer -> {
+                    Map<String, Object> result = new LinkedHashMap<>();
+                    result.put("answer", answer);
+                    // 임시 저장 후 pendingKey 반환 (프론트에서 O/X 버튼에 사용)
                     if (answer != null && !answer.isBlank()) {
-                        semanticCacheService.cacheAnswer(question, answer, category);
-                        System.out.println("[캐시STORE] 저장: " + question.substring(0, Math.min(40, question.length())));
+                        String pendingKey = semanticCacheService.cachePending(question, answer, category);
+                        result.put("pendingKey", pendingKey);
                     }
+                    return result;
                 });
+    }
+
+    /**
+     * O/X 피드백 엔드포인트
+     *
+     * O(approved=true) : pendingCache → 실제 캐시로 저장
+     * X(approved=false): pendingCache에서 제거 (저장 안 함)
+     *
+     * 프론트에서 답변 표시 후 O/X 버튼 클릭 시 호출
+     */
+    @PostMapping("/feedback")
+    public Mono<Map<String, String>> feedback(
+            @RequestParam String pendingKey,
+            @RequestParam boolean approved
+    ) {
+        if (approved) {
+            semanticCacheService.approvePending(pendingKey);
+            System.out.println("[피드백] O(승인) → 캐시 저장: " + pendingKey.substring(0, 8));
+            return Mono.just(Map.of("status", "approved"));
+        } else {
+            semanticCacheService.rejectPending(pendingKey);
+            System.out.println("[피드백] X(거절) → 캐시 미저장: " + pendingKey.substring(0, 8));
+            return Mono.just(Map.of("status", "rejected"));
+        }
     }
 
 }

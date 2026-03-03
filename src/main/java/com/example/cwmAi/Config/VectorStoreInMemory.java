@@ -8,7 +8,6 @@ import java.util.*;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.stream.Collectors;
 import dev.langchain4j.data.segment.TextSegment;
-import dev.langchain4j.model.embedding.AllMiniLmL6V2EmbeddingModel;
 import dev.langchain4j.model.embedding.EmbeddingModel;
 
 @Component
@@ -319,10 +318,13 @@ public class VectorStoreInMemory {
         }
     }
 
-    // ── 0226 김소연(수정): 청크 벡터 검색 ─────────────────────────────────────
-    // 이유: 1단계 LLM에 전체 조항 이름 목록 전달 방식 → 벡터+키워드 top-50 필터링으로 교체
-    //       조항 수가 늘어도 속도 일정, LLM 1단계 토큰 절감
-    private final EmbeddingModel embeddingModel = new AllMiniLmL6V2EmbeddingModel();
+    // ── 청크 벡터 검색 ─────────────────────────────────────────────────────────
+    // EmbeddingModelConfig에서 주입된 싱글턴 사용 (기존 직접 생성 제거)
+    private final EmbeddingModel embeddingModel;
+
+    public VectorStoreInMemory(EmbeddingModel embeddingModel) {
+        this.embeddingModel = embeddingModel;
+    }
 
     // 임베딩용 텍스트 생성 (조항번호 + 제목 + 본문 앞 500자)
     private String buildEmbeddingText(chunkDTO c) {

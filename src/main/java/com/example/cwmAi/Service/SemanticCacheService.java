@@ -1,7 +1,6 @@
 package com.example.cwmAi.Service;
 
 import dev.langchain4j.model.embedding.EmbeddingModel;
-import dev.langchain4j.model.embedding.AllMiniLmL6V2EmbeddingModel;
 import dev.langchain4j.data.segment.TextSegment;
 
 import org.springframework.stereotype.Service;
@@ -9,6 +8,7 @@ import org.springframework.stereotype.Service;
 import java.time.Instant;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.stream.Collectors;
 
 /**
  * 시맨틱 캐싱 - LLM 비용을 줄이는데 도움을 주는 캐싱 기술을 참조하였습니다 !
@@ -27,8 +27,18 @@ import java.util.concurrent.ConcurrentHashMap;
 public class SemanticCacheService {
 
     // ── 설정값 ──────────────────────────────────────────────────
-    /** 캐시 히트 기준 코사인 유사도 (0.90 이상이면 동일 질문으로 간주) */
-    private static final float SIMILARITY_THRESHOLD = 0.78f;
+    /**
+     * 캐시 히트 기준 코사인 유사도
+     * 0.78 → 0.90 으로 상향: "검증 신청"과 "재검증 신청" 같은 유사 표현 오히트 방지
+     */
+    private static final float SIMILARITY_THRESHOLD = 0.90f;
+
+    /**
+     * Jaccard 토큰 유사도 최소값
+     * 코사인 유사도가 SIMILARITY_THRESHOLD 이상이어도 Jaccard < 0.65면 캐시 미스 처리
+     * → "보안적합성 검증 신청" vs "보안적합성 재검증 신청" 구분
+     */
+    private static final float JACCARD_MIN = 0.65f;
 
     /** 캐시 TTL: 30일 (초 단위) */
     private static final long TTL_SECONDS = 30L * 24 * 60 * 60;
@@ -67,11 +77,13 @@ public class SemanticCacheService {
     /** 캐시 저장소: UUID → CacheEntry */
     private final ConcurrentHashMap<String, CacheEntry> cache = new ConcurrentHashMap<>();
 
-    public SemanticCacheService() {
-        // AllMiniLmL6V2: 384차원, 약 23MB, CPU 전용 ONNX 모델
-        // langchain4j-embeddings-all-minilm-l6-v2 의존성 필요
-        this.embeddingModel = new AllMiniLmL6V2EmbeddingModel();
-        System.out.println("[SemanticCache] 임베딩 모델 초기화 완료 (AllMiniLmL6V2, 384차원)");
+    /** 임시 저장소: 사용자 O/X 확인 대기 중인 항목 (pendingKey → CacheEntry) */
+    private final ConcurrentHashMap<String, CacheEntry> pendingCache = new ConcurrentHashMap<>();
+
+    // EmbeddingModelConfig에서 주입된 싱글턴 사용
+    public SemanticCacheService(EmbeddingModel embeddingModel) {
+        this.embeddingModel = embeddingModel;
+        System.out.println("[SemanticCache] 임베딩 모델 주입 완료 (싱글턴)");
     }
 
     // ── Public API ───────────────────────────────────────────────
@@ -125,11 +137,19 @@ public class SemanticCacheService {
         expiredKeys.forEach(cache::remove);
 
         if (best != null && bestScore >= SIMILARITY_THRESHOLD) {
-            best.hitCount++;
-            System.out.printf("[SemanticCache] HIT  유사도=%.4f  히트수=%d  질문='%s'  원본질문='%s'%n",
-                    bestScore, best.hitCount,
-                    truncate(question, 40), truncate(best.questionKey, 40));
-            return Optional.of(best.answer);
+            // 2차 검증: Jaccard 토큰 유사도
+            // 코사인 유사도가 높아도 핵심 단어가 다르면(예: "검증"≠"재검증") 미스 처리
+            float jaccard = jaccardSimilarity(question, best.questionKey);
+            if (jaccard >= JACCARD_MIN) {
+                best.hitCount++;
+                System.out.printf("[SemanticCache] HIT  코사인=%.4f  Jaccard=%.4f  히트수=%d  질문='%s'  원본='%s'%n",
+                        bestScore, jaccard, best.hitCount,
+                        truncate(question, 40), truncate(best.questionKey, 40));
+                return Optional.of(best.answer);
+            }
+            System.out.printf("[SemanticCache] MISS(Jaccard 미달) 코사인=%.4f  Jaccard=%.4f(기준=%.2f)  질문='%s'%n",
+                    bestScore, jaccard, JACCARD_MIN, truncate(question, 40));
+            return Optional.empty();
         }
 
         System.out.printf("[SemanticCache] MISS 최고유사도=%.4f  질문='%s'%n",
@@ -161,6 +181,62 @@ public class SemanticCacheService {
 
         System.out.printf("[SemanticCache] STORE 캐시항목수=%d  질문='%s'%n",
                 cache.size(), truncate(question, 40));
+    }
+
+    /**
+     * 답변을 임시 저장하고 pendingKey를 반환한다.
+     * 사용자가 O(승인) 버튼을 누르기 전까지 실제 캐시에 저장되지 않는다.
+     *
+     * @param question 사용자 질문
+     * @param answer   LLM 답변
+     * @param category 카테고리
+     * @return pendingKey (프론트에서 O/X 요청 시 사용)
+     */
+    public String cachePending(String question, String answer, String category) {
+        if (question == null || question.isBlank()) return null;
+        if (answer   == null || answer.isBlank())   return null;
+
+        float[] embedding = embed(question);
+        if (embedding == null) return null;
+
+        String pendingKey = UUID.randomUUID().toString();
+        pendingCache.put(pendingKey, new CacheEntry(embedding, answer, category, question));
+
+        System.out.printf("[SemanticCache] PENDING key=%s  질문='%s'%n",
+                pendingKey.substring(0, 8), truncate(question, 40));
+        return pendingKey;
+    }
+
+    /**
+     * O 버튼: 임시 캐시 → 실제 캐시로 승인
+     *
+     * @param pendingKey cachePending()이 반환한 키
+     */
+    public void approvePending(String pendingKey) {
+        if (pendingKey == null) return;
+        CacheEntry entry = pendingCache.remove(pendingKey);
+        if (entry == null) {
+            System.out.printf("[SemanticCache] APPROVE 실패 - 키 없음: %s%n", pendingKey.substring(0, 8));
+            return;
+        }
+        if (cache.size() >= MAX_CACHE_SIZE) evictOldest();
+        cache.put(UUID.randomUUID().toString(), entry);
+        System.out.printf("[SemanticCache] APPROVED → 캐시저장  key=%s  질문='%s'%n",
+                pendingKey.substring(0, 8), truncate(entry.questionKey, 40));
+    }
+
+    /**
+     * X 버튼: 임시 캐시에서 제거 (저장하지 않음)
+     *
+     * @param pendingKey cachePending()이 반환한 키
+     */
+    public void rejectPending(String pendingKey) {
+        if (pendingKey == null) return;
+        CacheEntry removed = pendingCache.remove(pendingKey);
+        if (removed != null) {
+            System.out.printf("[SemanticCache] REJECTED  key=%s  질문='%s'%n",
+                    pendingKey.substring(0, 8), truncate(removed.questionKey, 40));
+        }
     }
 
     /**
@@ -270,5 +346,33 @@ public class SemanticCacheService {
     private String truncate(String s, int max) {
         if (s == null) return "";
         return s.length() <= max ? s : s.substring(0, max) + "…";
+    }
+
+    /**
+     * Jaccard 토큰 유사도 계산 (0 ~ 1)
+     * 두 질문의 단어 집합 교집합 / 합집합 비율
+     * "검증 신청" vs "재검증 신청" → 교집합{신청}/합집합{검증,재검증,신청} = 0.33 → MISS
+     * "검증 신청 알려줘" vs "검증 신청 뭐야" → 교집합{검증,신청}/합집합{검증,신청,알려줘,뭐야} = 0.50 → 판단 필요
+     */
+    private float jaccardSimilarity(String a, String b) {
+        Set<String> ta = tokenize(a);
+        Set<String> tb = tokenize(b);
+        if (ta.isEmpty() || tb.isEmpty()) return 0f;
+
+        Set<String> intersection = new HashSet<>(ta);
+        intersection.retainAll(tb);
+
+        Set<String> union = new HashSet<>(ta);
+        union.addAll(tb);
+
+        return (float) intersection.size() / union.size();
+    }
+
+    /** 문자열을 2자 이상 한글/영문/숫자 토큰 집합으로 분리 */
+    private Set<String> tokenize(String s) {
+        if (s == null || s.isBlank()) return Collections.emptySet();
+        return Arrays.stream(s.replaceAll("[^가-힣a-zA-Z0-9]", " ").split("\\s+"))
+                .filter(t -> t.length() >= 2)
+                .collect(Collectors.toSet());
     }
 }

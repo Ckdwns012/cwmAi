@@ -8,7 +8,6 @@ import org.springframework.stereotype.Component;
 import com.example.cwmAi.dto.doc_DTO.TableDoc;
 import dev.langchain4j.model.embedding.EmbeddingModel;
 import dev.langchain4j.data.segment.TextSegment;
-import dev.langchain4j.model.embedding.AllMiniLmL6V2EmbeddingModel;
 
 @Component
 public class TableStoreInMemory {
@@ -17,9 +16,12 @@ public class TableStoreInMemory {
     private final List<TableDoc> store = new ArrayList<>();
     private final ReentrantReadWriteLock rwLock = new ReentrantReadWriteLock();
 
-    // 0225 김소연(수정): 표 내용 기반 벡터 검색용 임베딩 모델
-    // 이유: caption/title 없는 표는 셀 내용 전체로 질문과 의미 비교해야 정확한 표 선택 가능
-    private final EmbeddingModel embeddingModel = new AllMiniLmL6V2EmbeddingModel();
+    // EmbeddingModelConfig에서 주입된 싱글턴 사용
+    private final EmbeddingModel embeddingModel;
+
+    public TableStoreInMemory(EmbeddingModel embeddingModel) {
+        this.embeddingModel = embeddingModel;
+    }
 
     // ── 표 텍스트 추출 (임베딩용) ──────────────────────────────────────
     // fallback(페이지 전체 텍스트) vs 일반 표(셀 내용 합치기) 구분 처리
