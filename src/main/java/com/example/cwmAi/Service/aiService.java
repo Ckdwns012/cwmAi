@@ -144,6 +144,18 @@ public class aiService {
 
         List<TableDoc> allTables = readAndExtractTablesToList(null);
         tableStore.replaceAll(allTables);
+
+        // 0225 김소연(수정): 표 임베딩 계산
+        System.out.println("=== 표 임베딩 계산 시작 (총 " + allTables.size() + "개) ===");
+        allTables.forEach(t -> tableStore.computeAndStoreEmbedding(t));
+        System.out.println("=== 표 임베딩 계산 완료 ===");
+
+        // 0226 김소연(수정): 청크 임베딩 계산 (벡터+키워드 필터링용)
+        // 이유: 1단계 LLM에 전체 조항 목록 전달 → 벡터 top-50 필터링으로 교체, 속도 개선
+        System.out.println("=== 청크 임베딩 계산 시작 (총 " + allChunks.size() + "개) ===");
+        allChunks.forEach(c -> vectorStore.computeAndStoreEmbedding(c));
+        System.out.println("=== 청크 임베딩 계산 완료 ===");
+
         // 조항 이름이 없는 청크 점검
         checkChunksWithoutArticleTitle();
 
@@ -317,18 +329,36 @@ public class aiService {
 //                    return generateFinalAnswer(userPrompt, recommendedTitles, category);
 //                });
 //    }
-    //   캐시 확인 → 캐시 히트 시 즉시 반환 → 미스 시 LLM 호출 후 캐시 저장
-    public Mono<String> askModel(String userPrompt, String category) {
+    // v1 askModel (0226 주석처리)
+    // 캐시 → 전체 조항 목록 LLM1 → LLM2 방식
+    // public Mono<String> askModel(String userPrompt, String category) {
+    //     Optional<String> cached = semanticCacheService.findCachedAnswer(userPrompt, category);
+    //     if (cached.isPresent()) return Mono.just(cached.get());
+    //     return recommendArticleTitles(userPrompt, category, null)
+    //             .flatMap(titles -> titles.isEmpty()
+    //                 ? Mono.just("해당 분야의 관련 조항을 찾을 수 없습니다.")
+    //                 : generateFinalAnswer(userPrompt, titles, category))
+    //             .doOnSuccess(a -> { if (a != null && !a.isBlank()) semanticCacheService.cacheAnswer(userPrompt, a, category); });
+    // }
 
-        // ① 캐시에서 먼저 찾기 (동기 → Mono로 감싸기)
+    // 0226 김소연(수정): askModel v2 - 벡터+키워드 top-50 필터링 후 LLM 1단계
+    // 이유: 전체 조항 목록 → LLM 방식 대비 토큰 절감, 속도 개선
+    public Mono<String> askModel(String userPrompt, String category) {
+        // ① 캐시 확인
         Optional<String> cached = semanticCacheService.findCachedAnswer(userPrompt, category);
         if (cached.isPresent()) {
             System.out.println("[캐시HIT] 즉시 반환: " + userPrompt.substring(0, Math.min(40, userPrompt.length())));
             return Mono.just(cached.get());
         }
 
-        // ② 캐시 미스 → 기존 2단계 LLM 호출
-        return recommendArticleTitles(userPrompt, category, null)
+        // ② 벡터+키워드 top-50 필터링 (LLM 호출 없음, ms 단위)
+        List<chunkDTO> filteredChunks = filterChunksByVectorAndKeyword(userPrompt, category);
+        if (filteredChunks.isEmpty()) {
+            return Mono.just("해당 분야의 관련 내용을 찾을 수 없습니다. 다른 키워드로 다시 질문해주세요.");
+        }
+
+        // ③ 필터링된 청크 기준 LLM 1단계 → 2단계
+        return recommendArticleTitlesFromChunks(userPrompt, filteredChunks)
                 .flatMap(recommendedTitles -> {
                     if (recommendedTitles == null || recommendedTitles.isEmpty()) {
                         return Mono.just("해당 분야의 관련 조항을 찾을 수 없습니다. 보다 정확한 법률 용어로 다시 질문해주세요.");
@@ -336,7 +366,6 @@ public class aiService {
                     return generateFinalAnswer(userPrompt, recommendedTitles, category);
                 })
                 .doOnSuccess(answer -> {
-                    // ③ LLM 답변을 캐시에 저장 (비동기로 side-effect 처리)
                     if (answer != null && !answer.isBlank()) {
                         semanticCacheService.cacheAnswer(userPrompt, answer, category);
                     }
@@ -346,31 +375,41 @@ public class aiService {
     /**
      * 단계별 상태를 SSE로 전달하는 메서드
      */
+    // v1 askModelWithStages (0226 주석처리) - 전체 조항 목록 → LLM 방식
+    // public Flux<aiResponseDTO> askModelWithStages(String userPrompt, String category) {
+    //     Mono<List<String>> recommendedTitlesMono = recommendArticleTitles(userPrompt, category, null).cache();
+    //     ...
+    // }
+
+    // 0226 김소연(수정): askModelWithStages v2 - 벡터+키워드 필터링 후 LLM 전달
     public Flux<aiResponseDTO> askModelWithStages(String userPrompt, String category) {
-        // 1단계 시작
-        Mono<aiResponseDTO> stage1Start = Mono.just(new aiResponseDTO("stage1", "관련 조항을 찾는 중입니다...", null, null));
+        Mono<aiResponseDTO> stage1Start = Mono.just(
+                new aiResponseDTO("stage1", "관련 조항을 찾는 중입니다...", null, null));
 
-        // 1단계: 조항 이름 추천 (한 번만 실행되도록 cache, 파일 선택 없이 전체 파일 사용)
-        Mono<List<String>> recommendedTitlesMono = recommendArticleTitles(userPrompt, category, null).cache();
+        // 벡터+키워드 top-50 필터링
+        List<chunkDTO> filteredChunks = filterChunksByVectorAndKeyword(userPrompt, category);
+        if (filteredChunks.isEmpty()) {
+            return Flux.just(
+                    new aiResponseDTO("stage1", "관련 조항을 찾는 중입니다...", null, null),
+                    new aiResponseDTO("completed", null, null,
+                            "해당 분야의 관련 내용을 찾을 수 없습니다. 다른 키워드로 다시 질문해주세요.")
+            ).filter(dto -> dto != null && dto.getStage() != null);
+        }
 
-        // 1단계 완료 후 2단계 시작 및 최종 답변 생성
+        Mono<List<String>> recommendedTitlesMono =
+                recommendArticleTitlesFromChunks(userPrompt, filteredChunks).cache();
+
         Flux<aiResponseDTO> stage2AndFinal = recommendedTitlesMono
                 .flatMapMany(recommendedTitles -> {
                     if (recommendedTitles == null || recommendedTitles.isEmpty()) {
                         return Mono.just(new aiResponseDTO("completed", null, null,
                                 "해당 분야의 관련 조항을 찾을 수 없습니다. 보다 정확한 법률 용어로 다시 질문해주세요."));
                     }
-
-                    // 2단계 시작
                     Mono<aiResponseDTO> stage2Start = Mono.just(new aiResponseDTO("stage2",
                             "관련조항을 바탕으로 답변을 생성중입니다! 조금만 기다려주세요!",
                             recommendedTitles, null));
-
-                    // 최종 답변 생성
                     Mono<aiResponseDTO> finalAnswer = generateFinalAnswer(userPrompt, recommendedTitles, category)
                             .map(answer -> new aiResponseDTO("completed", null, recommendedTitles, answer));
-
-                    // 2단계 시작과 최종 답변을 순차적으로 연결
                     return Flux.concat(stage2Start, finalAnswer);
                 });
 
@@ -526,7 +565,19 @@ public class aiService {
                     return Mono.just(new ArrayList<String>());
                 });
     }
-
+    private String extractCaptionFromChunks(List<chunkDTO> chunks) {
+        java.util.regex.Pattern pattern =
+                java.util.regex.Pattern.compile("[<\\[\\(]?(별표|표)\\s*(\\d+)[>\\]\\)]?");
+        for (chunkDTO chunk : chunks) {
+            if (chunk.getText() == null) continue;
+            java.util.regex.Matcher m = pattern.matcher(chunk.getText());
+            if (m.find()) {
+                // "별표 3" → "별표3" 형태로 정규화
+                return m.group(1) + m.group(2);
+            }
+        }
+        return null;
+    }
     /**
      * 2단계 질의: 추천받은 조항 이름에 해당하는 실제 청크 내용을 AI에 전달하여 최종 답변을 생성한다.
      * @param userPrompt 사용자 질문
@@ -544,6 +595,7 @@ public class aiService {
         }
 
         System.out.println("[2단계] 추천받은 조항 이름에 해당하는 청크 수: " + relevantChunks.size());
+
 
         List<messageDTO> messages = new ArrayList<>();
 
@@ -595,27 +647,41 @@ public class aiService {
 //                        + " (page " + bestTable.get().getPage() + ")");
 //            }
         try {
-            // 조항 본문에서 표/별표 참조 언급 수집
-            StringBuilder chunkContext = new StringBuilder();
-            for (chunkDTO chunk : relevantChunks) {
-                if (chunk.getText() != null) chunkContext.append(chunk.getText()).append(" ");
-            }
-            String answerCtx = chunkContext.length() > 0 ? chunkContext.toString() : null;
+            // 0225 김소연(수정): 1순위 캡션 직접 지목 → 2순위 벡터 유사도 top-2
+            // 이유: <별표3> 같은 직접 언급은 정확하게 매핑, 없으면 셀 내용 의미로 top-2 선택
 
-            java.util.Optional<com.example.cwmAi.dto.doc_DTO.TableDoc> bestTable =
-                    tableStore.findBestTableForQuestion(userPrompt, answerCtx, category, null);
-            if (bestTable.isPresent()) {
-                String tableText = tableStore.renderTableForPrompt(bestTable.get(), 25, 180);
+            // 1순위: 청크 본문에서 "별표N" / "표N" 직접 언급 추출
+            String captionMention = extractCaptionFromChunks(relevantChunks);
+            List<com.example.cwmAi.dto.doc_DTO.TableDoc> tablesToAttach = new ArrayList<>();
+
+            if (captionMention != null) {
+                tableStore.findByCaption(captionMention, category)
+                        .ifPresent(t -> {
+                            tablesToAttach.add(t);
+                            System.out.println("[표첨부] 1순위 캡션 직접 지목: " + captionMention
+                                    + " (page " + t.getPage() + ")");
+                        });
+            }
+
+            // 2순위: 캡션 못 찾으면 벡터 유사도 top-2
+            if (tablesToAttach.isEmpty()) {
+                List<com.example.cwmAi.dto.doc_DTO.TableDoc> vectorResult =
+                        tableStore.findTop2ByVector(userPrompt, category);
+                tablesToAttach.addAll(vectorResult);
+                if (!vectorResult.isEmpty()) {
+                    System.out.println("[표첨부] 2순위 벡터검색 top-" + vectorResult.size() + "개 첨부");
+                } else {
+                    System.out.println("[표첨부] 관련 표 없음 (유사도 0.30 미만)");
+                }
+            }
+
+            // 선택된 표를 컨텍스트에 추가
+            for (com.example.cwmAi.dto.doc_DTO.TableDoc t : tablesToAttach) {
+                String tableText = tableStore.renderTableForPrompt(t, 25, 180);
                 contextBuilder.append("\n\n").append("다음 표를 참고하여 답변을 보강하세요:\n");
                 contextBuilder.append(tableText).append("\n");
-                System.out.println("[표첨부] 표 1개 첨부: "
-                        + (bestTable.get().getCaption() == null ? "" : bestTable.get().getCaption())
-                        + " "
-                        + (bestTable.get().getTitle() == null ? "" : bestTable.get().getTitle())
-                        + " (page " + bestTable.get().getPage() + ")");
-            } else {
-                System.out.println("[표첨부] 관련 표 없음");
             }
+
         } catch (Exception ex) {
             System.err.println("[표첨부] 실패: " + ex.getMessage());
         }
@@ -996,4 +1062,121 @@ public class aiService {
 
         return result;
     }
+
+    // 0226 김소연(수정): 벡터+키워드 하이브리드 top-50 필터링
+    // 이유: 전체 조항 목록 → LLM 방식 대신 유사도+키워드로 관련 청크 선별
+    //       유사도 0.85 이상 우선, 결과 3개 미만이면 top-3 강제 반환(빈 결과 방지)
+    private List<chunkDTO> filterChunksByVectorAndKeyword(String question, String category) {
+        // 1) 벡터 유사도 0.85 이상 top-50
+        List<chunkDTO> vectorResults = vectorStore.searchByVector(question, 50, category);
+
+        // 2) 키워드 매칭 (2자 이상 단어)
+        Set<String> keywords = extractKeywords(question);
+        List<chunkDTO> keywordResults = new ArrayList<>();
+        if (!keywords.isEmpty()) {
+            for (chunkDTO c : vectorStore.getChunksByCategory(category)) {
+                String target = (c.getArticleTitle() != null ? c.getArticleTitle() : "")
+                        + " " + (c.getText() != null
+                        ? c.getText().substring(0, Math.min(200, c.getText().length())) : "");
+                for (String kw : keywords) {
+                    if (target.contains(kw)) { keywordResults.add(c); break; }
+                }
+            }
+        }
+
+        // 3) 합집합 (중복 제거)
+        Map<String, chunkDTO> merged = new LinkedHashMap<>();
+        for (chunkDTO c : vectorResults) merged.put(c.getChunkId(), c);
+        for (chunkDTO c : keywordResults) merged.putIfAbsent(c.getChunkId(), c);
+        List<chunkDTO> result = new ArrayList<>(merged.values());
+
+        // 4) 3개 미만이면 top-3 강제 반환
+        if (result.size() < 3) {
+            System.out.println("[필터링] 결과 부족(" + result.size() + "개) → top-3 강제 반환");
+            List<chunkDTO> forced = vectorStore.searchByVector(question, 3, category);
+            return forced.isEmpty() ? result : forced;
+        }
+
+        if (result.size() > 50) result = result.subList(0, 50);
+        System.out.println("[필터링] 벡터+키워드 결과: " + result.size() + "개 청크");
+        return result;
+    }
+
+    // 키워드 추출 (2자 이상, 불용어 제외)
+    private Set<String> extractKeywords(String question) {
+        Set<String> keywords = new LinkedHashSet<>();
+        if (question == null || question.isBlank()) return keywords;
+        String[] tokens = question.replaceAll("[^가-힣a-zA-Z0-9\s]", " ").split("\s+");
+        Set<String> stopWords = Set.of("은", "는", "이", "가", "을", "를", "의", "에", "에서",
+                "로", "으로", "와", "과", "도", "만", "뭐", "뭔", "어떤", "어떻게", "알려줘",
+                "무엇", "해줘", "있나요", "있어요", "인가요", "입니까", "알고싶어");
+        for (String token : tokens) {
+            String t = token.trim();
+            if (t.length() >= 2 && !stopWords.contains(t)) keywords.add(t);
+        }
+        return keywords;
+    }
+
+    // 0226 김소연(수정): 필터링된 청크 기준 LLM 1단계 (기존 recommendArticleTitles와 동일 구조)
+    // 이유: 전체 목록이 아닌 top-50 필터 청크의 조항 이름만 LLM에 전달 → 토큰 절감
+    private Mono<List<String>> recommendArticleTitlesFromChunks(String userPrompt, List<chunkDTO> chunks) {
+        Map<String, String> titleToId = new LinkedHashMap<>();
+        for (chunkDTO c : chunks) {
+            String title = c.getArticleTitle();
+            if (title != null && !title.isBlank() && !titleToId.containsKey(title))
+                titleToId.put(title, c.getChunkId());
+        }
+        if (titleToId.isEmpty()) return Mono.just(new ArrayList<>());
+
+        List<String> titles = new ArrayList<>(titleToId.keySet());
+        StringBuilder titlesText = new StringBuilder();
+        for (int i = 0; i < titles.size(); i++) {
+            titlesText.append((i + 1)).append(". ").append(titles.get(i));
+            if (i < titles.size() - 1) titlesText.append(" ");
+        }
+
+        List<messageDTO> messages = new ArrayList<>();
+        messages.add(new messageDTO("system",
+                """
+                너는 법령 조항을 분석하는 전문가다.
+                중요 규칙:
+                1. 반드시 JSON 배열 형식으로만 답변한다. 예: ["조항이름1", "조항이름2"]
+                2. 조항 이름은 제공된 목록에서 정확히 선택해야 한다.
+                3. 2개 이상 7개 이하로 추천한다.
+                4. 한글로만 답변한다.
+                """));
+        messages.add(new messageDTO("user", String.format(
+                "사용자 질문: %s 조항 이름 목록:%s " +
+                "질문과 가장 관련 높은 조항 이름을 2~7개 JSON 배열로만 답변하세요.",
+                userPrompt, titlesText)));
+
+        System.out.println("[1단계] 필터링된 조항 수: " + titles.size() + "개 → LLM 전달");
+
+        return webClient.post().uri("/chat")
+                .header("Content-Type", "application/json")
+                .bodyValue(new ChatRequest(MODEL_NAME, messages))
+                .retrieve().bodyToMono(String.class)
+                .map(raw -> {
+                    try {
+                        responseDTO resp = objectMapper.readValue(raw, responseDTO.class);
+                        if (resp == null || resp.getMessage() == null) return new ArrayList<String>();
+                        String c = resp.getContent();
+                        if (c == null || c.isBlank()) return new ArrayList<String>();
+                        int s = c.indexOf('['), e = c.lastIndexOf(']');
+                        if (s >= 0 && e > s) c = c.substring(s, e + 1);
+                        @SuppressWarnings("unchecked")
+                        List<String> res = objectMapper.readValue(c, List.class);
+                        System.out.println("[1단계] 추천 조항: " + res);
+                        return res;
+                    } catch (Exception ex) {
+                        System.err.println("[1단계] 파싱 오류: " + ex.getMessage());
+                        return new ArrayList<String>();
+                    }
+                })
+                .onErrorResume(e -> {
+                    System.err.println("[1단계] 오류: " + e.getMessage());
+                    return Mono.just(new ArrayList<>());
+                });
+    }
+
 }

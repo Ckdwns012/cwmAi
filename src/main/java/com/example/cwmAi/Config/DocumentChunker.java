@@ -20,7 +20,7 @@ public class DocumentChunker {
      * - 조항 이름(조 제목)
      * - 조항 내용(본문)
      * - 카테고리
-     * 
+     *
      * 개선사항:
      * - 법률 참조 패턴(예: "제XX조를 참고하라")을 실제 조항 시작과 구분
      * - 조항 경계를 더 정확하게 판단
@@ -37,6 +37,11 @@ public class DocumentChunker {
            0. 법령명 추출 (법/시행령/규칙/규정/지침)
            ========================= */
         String lawName = extractLawName(fileName);
+        // 0226 김소연(수정): 법령명 추출 실패 시 파일명(확장자 제거)을 법령명으로 사용
+        // 이유: 업무매뉴얼처럼 법령 형식이 아닌 문서도 청킹 가능하도록
+        if ("알 수 없음".equals(lawName)) {
+            lawName = fileName.replaceAll("\\.[^.]+$", "").trim();
+        }
         System.out.println("추출된 법령명: " + lawName);
 
         /* =========================
@@ -63,7 +68,7 @@ public class DocumentChunker {
            - 줄바꿈을 고려하여 조 경계를 정확히 찾음
            - 법률 참조 패턴을 제외하여 실제 조항만 추출
            ========================= */
-        
+
         // 실제 조항 시작 패턴: 줄 시작에 "제 숫자조" 또는 "제 숫자조의숫자" 형태
         // 단, 법률 참조가 아닌 실제 조항 시작만 매칭
         Pattern articlePattern =
@@ -78,24 +83,24 @@ public class DocumentChunker {
             int position = articleMatcher.start();
             String matchedText = articleMatcher.group(0).trim();
             String articleNum = articleMatcher.group(1); // 조항 번호
-            
+
             // 해당 위치 주변 텍스트 확인 (앞 50자, 뒤 50자)
             int contextStart = Math.max(0, position - 50);
             int contextEnd = Math.min(text.length(), position + matchedText.length() + 50);
             String context = text.substring(contextStart, contextEnd);
-            
+
             // 법률 참조 패턴인지 확인
             boolean isReference = isLawReference(context, position - contextStart, matchedText);
-            
+
             if (!isReference) {
                 // 실제 조항 시작으로 판단
                 articlePositions.add(position);
-                
+
                 // 조항 번호 추출 (예: "제1조", "제2조", "제3조의2")
                 String fullMatch = articleMatcher.group(0).trim();
                 String articleNumberStr = extractArticleNumber(fullMatch, articleNum);
                 articleNumbers.add(articleNumberStr);
-                
+
                 String bracketTitle = articleMatcher.group(2); // 괄호 안 제목
                 String finalTitle;
                 if (bracketTitle != null && !bracketTitle.isBlank()) {
@@ -107,12 +112,19 @@ public class DocumentChunker {
                 articleTitles.add(finalTitle);
             }
         }
-        
+
         System.out.println("발견된 조항 수: " + articlePositions.size());
+        // 0226 김소연(수정): 조항 유무 관계없이 목차 청킹 항상 병행
+        // 이유: 업무매뉴얼은 조항 포함 + 목차 단위 내용이 공존 → 둘 다 청킹 필요
+        List<chunkDTO> tocChunks = chunkByTableOfContents(fileName, text, category, lawName);
+        if (!tocChunks.isEmpty()) {
+            System.out.println("[청킹] 목차 청크 " + tocChunks.size() + "개 추가");
+            chunks.addAll(tocChunks);
+        }
+
         if (articlePositions.isEmpty()) {
-            System.err.println("[경고] 조항을 찾을 수 없습니다. 파일을 확인해주세요.");
-            System.out.println("=== 청킹 종료: 조항 없음 ===");
-            return chunks; // 조항이 없으면 빈 리스트 반환
+            System.out.println("=== 청킹 완료: 총 " + chunks.size() + "개 청크(목차 전용) ===");
+            return chunks;
         }
 
         /* =========================
@@ -127,15 +139,15 @@ public class DocumentChunker {
                     : text.length();
 
             String articleText = text.substring(start, end).trim();
-            
+
             // 조항 내용 정리: 불필요한 공백 제거, 하지만 구조는 유지
             articleText = cleanArticleText(articleText);
-            
+
             // 조항이 너무 짧으면(50자 미만) 건너뛰기 (잘못된 매칭일 가능성)
             if (articleText.length() < 50) {
                 continue;
             }
-            
+
             String chapterTitle = findChapterTitle(start, chapterPositions, chapterTitles);
             if (chapterTitle == null) {
                 chapterTitle = "";
@@ -143,13 +155,13 @@ public class DocumentChunker {
 
             String articleNumber = articleNumbers.get(i); // 조항 번호
             String articleTitle = articleTitles.get(i);
-            
+
             // 필수 필드 검증
             List<String> validationErrors = validateChunkFields(
-                lawName, chapterTitle, articleNumber, articleTitle, 
-                articleText, fileName, category
+                    lawName, chapterTitle, articleNumber, articleTitle,
+                    articleText, fileName, category
             );
-            
+
             if (!validationErrors.isEmpty()) {
                 System.err.println("=== 청크 생성 실패: 필수 필드 누락 ===");
                 System.err.println("파일명: " + fileName);
@@ -158,12 +170,12 @@ public class DocumentChunker {
                 for (String error : validationErrors) {
                     System.err.println("  - " + error);
                 }
-                System.err.println("조항 내용 (처음 200자): " + 
-                    (articleText.length() > 200 ? articleText.substring(0, 200) + "..." : articleText));
+                System.err.println("조항 내용 (처음 200자): " +
+                        (articleText.length() > 200 ? articleText.substring(0, 200) + "..." : articleText));
                 System.err.println("=====================================");
                 continue; // 필수 필드가 없으면 청크를 생성하지 않음
             }
-            
+
             // 조항 이름이 비어있으면 조항 번호를 기본값으로 사용
             if (articleTitle == null || articleTitle.trim().isEmpty()) {
                 articleTitle = articleNumber;
@@ -182,17 +194,17 @@ public class DocumentChunker {
                     category                 // 카테고리
             );
             chunks.add(dto);
-            
+
             // 생성된 청크 정보 로그 (디버깅용)
-            System.out.println("[청크 생성 성공 #" + (i + 1) + "] " + articleNumber + 
-                " - " + articleTitle + " (길이: " + articleText.length() + "자)");
+            System.out.println("[청크 생성 성공 #" + (i + 1) + "] " + articleNumber +
+                    " - " + articleTitle + " (길이: " + articleText.length() + "자)");
         }
-        
+
         System.out.println("=== 청킹 완료: 총 " + chunks.size() + "개 청크 생성 ===");
         System.out.println();
         return chunks;
     }
-    
+
     /**
      * 법률 참조 패턴인지 확인
      * @param context 주변 텍스트 (앞 50자 + 매칭 텍스트 + 뒤 50자)
@@ -204,19 +216,19 @@ public class DocumentChunker {
         // 매칭 텍스트 앞부분 확인
         String before = context.substring(0, matchPosition);
         String after = context.substring(matchPosition + matchedText.length());
-        
+
         // 실제 조항 시작의 특징:
         // 1. 줄 시작에 위치 (앞에 줄바꿈이 있거나 텍스트 시작)
         // 2. 앞에 다른 조항 참조가 없음
-        
+
         // 참조 패턴의 특징:
         // 1. 문장 중간에 위치 (앞에 다른 텍스트가 있음)
         // 2. 뒤에 조사나 참조 키워드가 옴 (을, 를, 에, 의, 제X항 등)
-        
+
         // 앞부분이 비어있거나 줄바꿈으로 끝나면 실제 조항일 가능성 높음
         String beforeTrimmed = before.trim();
-        if (beforeTrimmed.isEmpty() || beforeTrimmed.endsWith("\n") || 
-            before.matches(".*\\n\\s*$")) {
+        if (beforeTrimmed.isEmpty() || beforeTrimmed.endsWith("\n") ||
+                before.matches(".*\\n\\s*$")) {
             // 뒷부분 확인: 조사나 참조 키워드가 바로 오면 참조
             String afterTrimmed = after.trim();
             if (afterTrimmed.matches("^(?:을|를|에|의|에\\s*따르면|를\\s*참고|에\\s*따라|에\\s*의하여|에\\s*의한|제\\s*\\d+항).*")) {
@@ -225,36 +237,36 @@ public class DocumentChunker {
             // 실제 조항으로 판단
             return false;
         }
-        
+
         // 앞부분에 다른 조항 참조가 있으면 참조로 판단
         // "제X조를", "제X조제X항", "제X조에 따르면" 등의 패턴
         Pattern referenceBeforePattern = Pattern.compile(
-            "제\\s*\\d+(?:조(?:의\\s*\\d+)?)?(?:제\\s*\\d+항)?(?:을|를|에|의|에\\s*따르면|를\\s*참고|에\\s*따라|에\\s*의하여|에\\s*의한|및|와|과)"
+                "제\\s*\\d+(?:조(?:의\\s*\\d+)?)?(?:제\\s*\\d+항)?(?:을|를|에|의|에\\s*따르면|를\\s*참고|에\\s*따라|에\\s*의하여|에\\s*의한|및|와|과)"
         );
         if (referenceBeforePattern.matcher(beforeTrimmed).find()) {
             return true;
         }
-        
+
         // 뒷부분에 참조 키워드가 있으면 참조로 판단
         String afterTrimmed = after.trim();
         if (afterTrimmed.matches("^(?:을|를|에|의|에\\s*따르면|를\\s*참고|에\\s*따라|에\\s*의하여|에\\s*의한|제\\s*\\d+항).*")) {
             return true;
         }
-        
+
         // 문장 중간에 있고 앞뒤에 일반 텍스트가 있으면 참조일 가능성 높음
-        if (!beforeTrimmed.isEmpty() && !afterTrimmed.isEmpty() && 
-            !beforeTrimmed.endsWith("\n") && !afterTrimmed.startsWith("\n")) {
+        if (!beforeTrimmed.isEmpty() && !afterTrimmed.isEmpty() &&
+                !beforeTrimmed.endsWith("\n") && !afterTrimmed.startsWith("\n")) {
             // 앞에 조항 번호가 있고 뒤에 조사가 오면 참조
-            if (beforeTrimmed.matches(".*제\\s*\\d+(?:조(?:의\\s*\\d+)?)?$") && 
-                afterTrimmed.matches("^(?:을|를|에|의|제\\s*\\d+항).*")) {
+            if (beforeTrimmed.matches(".*제\\s*\\d+(?:조(?:의\\s*\\d+)?)?$") &&
+                    afterTrimmed.matches("^(?:을|를|에|의|제\\s*\\d+항).*")) {
                 return true;
             }
         }
-        
+
         // 기본적으로 실제 조항으로 판단
         return false;
     }
-    
+
     /**
      * 조항 번호 추출
      * @param fullMatch 매칭된 전체 문자열 (예: "제1조", "제3조의2", "제5조(제목)")
@@ -273,7 +285,7 @@ public class DocumentChunker {
         // 기본: "제X조"
         return "제" + articleNum + "조";
     }
-    
+
     /**
      * 청크 필수 필드 검증
      * @param lawName 법령명
@@ -286,48 +298,49 @@ public class DocumentChunker {
      * @return 검증 오류 목록 (오류가 없으면 빈 리스트)
      */
     private List<String> validateChunkFields(
-            String lawName, String chapterTitle, String articleNumber, 
+            String lawName, String chapterTitle, String articleNumber,
             String articleTitle, String text, String fileName, String category) {
         List<String> errors = new ArrayList<>();
-        
+
         // 법령명 검증
-        if (lawName == null || lawName.trim().isEmpty() || lawName.equals("알 수 없음")) {
+        // 0226 김소연(수정): "알 수 없음"은 파일명으로 대체되므로 오류 처리 제외
+        if (lawName == null || lawName.trim().isEmpty()) {
             errors.add("법령명이 없거나 유효하지 않음: " + lawName);
         }
-        
+
         // 조항 번호 검증
         if (articleNumber == null || articleNumber.trim().isEmpty()) {
             errors.add("조항 번호가 없음");
         } else if (!articleNumber.matches("제\\s*\\d+(?:조(?:의\\s*\\d+)?)?")) {
             errors.add("조항 번호 형식이 올바르지 않음: " + articleNumber);
         }
-        
+
         // 조항 이름 검증 (비어있어도 조항 번호로 대체 가능하므로 경고만)
         if (articleTitle == null || articleTitle.trim().isEmpty()) {
             // 조항 이름이 없으면 조항 번호를 사용하므로 오류가 아님
             // 하지만 로그는 남김
         }
-        
+
         // 조항 내용 검증
         if (text == null || text.trim().isEmpty()) {
             errors.add("조항 내용이 없음");
         } else if (text.trim().length() < 10) {
             errors.add("조항 내용이 너무 짧음 (10자 미만): " + text.trim().length() + "자");
         }
-        
+
         // 파일명 검증
         if (fileName == null || fileName.trim().isEmpty()) {
             errors.add("파일명이 없음");
         }
-        
+
         // 카테고리 검증 (null이거나 빈 문자열이어도 허용하되, 로그는 남김)
         if (category == null || category.trim().isEmpty()) {
             // 카테고리는 선택사항이므로 오류가 아님
         }
-        
+
         return errors;
     }
-    
+
     /**
      * 조항 텍스트 정리
      * - 불필요한 공백 제거
@@ -377,6 +390,56 @@ public class DocumentChunker {
         }
         return result;
     }
+
+    // 0226 김소연(수정): 목차 번호(01/02/03, I/II, 1./2.) 기준 청킹
+    // 이유: 업무매뉴얼처럼 "제N조" 형식이 아닌 문서용 청킹 처리
+    private List<chunkDTO> chunkByTableOfContents(
+            String fileName, String text, String category, String lawName) {
+
+        List<chunkDTO> chunks = new ArrayList<>();
+
+        // "01 제목", "1. 제목", "I. 제목" 등 다양한 목차 번호 패턴
+        Pattern tocPattern = Pattern.compile(
+                "(?m)^[ \t]*(\\d{1,2}|[IVXivx]{1,4})(?:\\.|[ \t])[ \t]*([가-힣A-Za-z][^\n]{1,50})$"
+        );
+        Matcher tocMatcher = tocPattern.matcher(text);
+
+        List<Integer> positions = new ArrayList<>();
+        List<String> numbers = new ArrayList<>();
+        List<String> titles = new ArrayList<>();
+
+        while (tocMatcher.find()) {
+            String num = tocMatcher.group(1).trim();
+            String title = tocMatcher.group(2).trim();
+            if (title.length() < 2) continue;
+            if (title.matches("\\d+")) continue; // 페이지 번호 제외
+
+            positions.add(tocMatcher.start());
+            numbers.add(num);
+            titles.add(title);
+        }
+
+        System.out.println("[목차청킹] 발견된 목차 항목 수: " + positions.size());
+        if (positions.isEmpty()) return chunks;
+
+        for (int i = 0; i < positions.size(); i++) {
+            int start = positions.get(i);
+            int end = (i + 1 < positions.size()) ? positions.get(i + 1) : text.length();
+            String sectionText = text.substring(start, end).trim();
+            sectionText = cleanArticleText(sectionText);
+            if (sectionText.length() < 30) continue;
+
+            chunkDTO dto = new chunkDTO(
+                    lawName, "", numbers.get(i), titles.get(i),
+                    sectionText, null, fileName, i, category
+            );
+            chunks.add(dto);
+            System.out.println("[목차청크 #" + (i+1) + "] " + numbers.get(i)
+                    + " - " + titles.get(i) + " (" + sectionText.length() + "자)");
+        }
+        return chunks;
+    }
+
     // 0223 김소연(수정): 조항 본문에서 표/별표 참조 토큰 추출
     // 이유: "<표1>에 따른다" 같은 문구가 있을 때 TABLE 내용을 조항 청크에 병합하기 위함
     public List<String> extractTableReferences(String articleText) {
@@ -400,4 +463,3 @@ public class DocumentChunker {
         return refs.stream().distinct().toList();
     }
 }
-

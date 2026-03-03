@@ -94,12 +94,35 @@ public class StructuredDocumentParser {
 
                 boolean looksLikeTocPage = isLikelyTocPage(pageText);
 
+                // ── 필터 통과한 표 vs 거부된 표 분리 ──────────────────────────
                 List<Table> filtered = new ArrayList<>();
+                boolean anyRejected = false;
                 for (Table t : tables) {
                     if (isLikelyRealTable(t, looksLikeTocPage)) {
                         filtered.add(t);
+                    } else {
+                        anyRejected = true;
                     }
                 }
+
+                // ── 0225 김소연(수정): 필터 거부 페이지 → 페이지 텍스트 fallback 저장 ──
+                // 이유: 업무매뉴얼처럼 셀에 긴 텍스트가 많아 Tabula가 거부하는 표도
+                //       페이지 전체 텍스트를 TableDoc으로 저장하면 벡터 검색으로 활용 가능
+                if (anyRejected && !pageText.isBlank()) {
+                    tableSeq++;
+                    String fallbackId = String.format("TABLE_%03d", tableSeq);
+                    TableDoc fallback = new TableDoc();
+                    fallback.setTableId(fallbackId);
+                    fallback.setFileName(fileName);
+                    fallback.setCategory(category);
+                    fallback.setPage(pageNum);
+                    fallback.setPageFallback(true);
+                    fallback.setPageFullText(pageText.trim());
+                    totalTablesFound++;
+                    result.add(fallback);
+                    System.out.println("[표추출] page=" + pageNum + " → 필터거부 fallback 저장 id=" + fallbackId);
+                }
+
                 if (filtered.isEmpty()) continue;
 
                 System.out.println("[표추출] file=" + pdfFile.getName()
@@ -216,121 +239,37 @@ public class StructuredDocumentParser {
         return c;
     }
 
-    /**
-     * 추출된 Table이 실제 데이터 표인지 판별한다.
-     *
-     * 개선 포인트 (2025-02-24 김소연):
-     * 기존 로직은 행수·열수·채움율만 체크하여 공문서 구분선(────)이 Tabula에서
-     * 테이블 경계로 잡힐 때 일반 텍스트 단락을 "1열짜리 표"로 오인식하는 문제가 있었음.
-     *
-     * 추가된 필터 5가지:
-     *   1) 단일 컬럼 지배 검사  - 행의 80% 이상이 1열이면 텍스트 단락으로 간주
-     *   2) 컬럼 수 분산 검사    - 열 수 편차가 너무 크면(구조 없음) 거부
-     *   3) 구분선 행(divider)   - 빈 행이나 대시/점으로만 채워진 행 비율이 높으면 거부
-     *   4) 긴 텍스트 셀 비율    - 셀 내용이 산문(prose)이면 거부
-     *   5) 목차 페이지 강화     - 목차 페이지에서는 2열 이상 + 짧은 셀 필수
-     */
     private boolean isLikelyRealTable(Table t, boolean looksLikeTocPage) {
         if (t == null) return false;
         List<List<RectangularTextContainer>> rows = t.getRows();
         if (rows == null || rows.isEmpty()) return false;
 
-        int rowCount    = rows.size();
+        int rowCount = rows.size();
         int colCountMax = 0;
-        int nonEmptyCells   = 0;
-        int totalCells      = 0;
-        int longTextCells   = 0;   // 셀 내용 50자 이상
-        int dividerRows     = 0;   // 구분선 행 (빈 행 또는 대시/점만)
-        int singleColRows   = 0;   // 열 수가 1인 행
-
-        // 컬럼 수 분포 계산용
-        List<Integer> colCounts = new ArrayList<>();
+        int nonEmptyCells = 0;
+        int totalCells = 0;
+        int longTextCells = 0;
 
         for (List<RectangularTextContainer> row : rows) {
-            if (row == null) {
-                dividerRows++;
-                continue;
-            }
-
-            int colsInRow = row.size();
-            colCountMax = Math.max(colCountMax, colsInRow);
-            colCounts.add(colsInRow);
-
-            if (colsInRow <= 1) singleColRows++;
-
-            boolean rowIsAllEmptyOrDash = true;
+            if (row == null) continue;
+            colCountMax = Math.max(colCountMax, row.size());
             for (RectangularTextContainer cell : row) {
                 totalCells++;
                 String v = (cell == null || cell.getText() == null) ? "" : cell.getText().trim();
                 if (!v.isEmpty()) nonEmptyCells++;
-                if (v.length() >= 50) longTextCells++;   // 50자 이상 = 산문 의심
-
-                // 구분선 셀 판별: 빈 칸 or 대시/점/밑줄/공백만
-                if (!v.isEmpty() && !v.matches("[\\-—_·.\\s]+")) {
-                    rowIsAllEmptyOrDash = false;
-                }
+                if (v.length() >= 25) longTextCells++;
             }
-            if (rowIsAllEmptyOrDash) dividerRows++;
         }
 
-        // ─── 기본 조건 ────────────────────────────────────────────
         if (rowCount < 2 || colCountMax < 2) return false;
 
-        double fillRatio = (totalCells == 0) ? 0.0
-                : (double) nonEmptyCells / totalCells;
+        double fillRatio = (totalCells == 0) ? 0.0 : ((double) nonEmptyCells / (double) totalCells);
         if (fillRatio < 0.25) return false;
 
-        // ─── [필터 1] 단일 컬럼 지배 검사 ───────────────────────────
-        // 행의 80% 이상이 1열 → 구분선으로 나뉜 텍스트 단락일 가능성 높음
-        if (!colCounts.isEmpty()) {
-            double singleColRatio = (double) singleColRows / rowCount;
-            if (singleColRatio >= 0.80) {
-                System.out.printf("[표필터] 단일컬럼 지배 (%.0f%%) → 거부%n", singleColRatio * 100);
-                return false;
-            }
-        }
-
-        // ─── [필터 2] 컬럼 수 분산 검사 ─────────────────────────────
-        // 실제 표는 열 수가 일정함. 편차가 지나치게 크면 구조 없는 텍스트
-        if (colCounts.size() >= 3) {
-            double mean = colCounts.stream().mapToInt(Integer::intValue).average().orElse(0);
-            double variance = colCounts.stream()
-                    .mapToDouble(c -> (c - mean) * (c - mean))
-                    .average().orElse(0);
-            double stdDev = Math.sqrt(variance);
-
-            // 평균 대비 표준편차가 60% 초과 = 열 구조가 일관되지 않음
-            if (mean > 0 && (stdDev / mean) > 0.60) {
-                System.out.printf("[표필터] 컬럼수 불일치(평균=%.1f, stdDev=%.1f) → 거부%n", mean, stdDev);
-                return false;
-            }
-        }
-
-        // ─── [필터 3] 구분선 행 비율 검사 ───────────────────────────
-        // 구분선 행이 30% 이상이면 표가 아니라 섹션 구분자일 가능성
-        double dividerRatio = (double) dividerRows / rowCount;
-        if (dividerRatio >= 0.30) {
-            System.out.printf("[표필터] 구분선 행 비율 %.0f%% → 거부%n", dividerRatio * 100);
-            return false;
-        }
-
-        // ─── [필터 4] 긴 텍스트 셀 비율 검사 ───────────────────────
-        // 셀의 40% 이상이 50자 초과 → 산문 텍스트 단락 오인식 가능성
-        if (nonEmptyCells > 0) {
-            double longTextRatio = (double) longTextCells / nonEmptyCells;
-            if (longTextRatio >= 0.40) {
-                System.out.printf("[표필터] 긴 텍스트 셀 비율 %.0f%% → 거부%n", longTextRatio * 100);
-                return false;
-            }
-        }
-
-        // ─── [필터 5] 목차 페이지 강화 ──────────────────────────────
         if (looksLikeTocPage) {
-            // 목차 페이지: 2열 이상 + 짧은 셀 많아야 함
-            if (colCountMax < 2 || longTextCells > 1) return false;
+            if (longTextCells <= 1) return false;
         }
 
-        // ─── 소규모 표 최소 조건 ─────────────────────────────────────
         if (rowCount <= 2 && colCountMax <= 2) {
             if (nonEmptyCells <= 2) return false;
         }
