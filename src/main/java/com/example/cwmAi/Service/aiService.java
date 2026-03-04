@@ -39,7 +39,7 @@ public class aiService {
        설정값
      ========================= */
     private static final String OLLAMA_BASE_URL = "http://localhost:11434/api";
-    private static final String MODEL_NAME = "qwen3:4b-instruct-2507-q4_K_M";
+    private static final String MODEL_NAME = "exaone3.5:2.4b";
     // JAR 파일 실행 위치 기준 상대 경로 (uploads 폴더)
     private static final String UPLOAD_DIR;
 
@@ -290,6 +290,12 @@ public class aiService {
         // 0223 김소연(수정): 기존 store에서 해당 카테고리만 제거 후 새 청크로 교체(원자적 반영)
         // 이유: clear 전체 삭제 없이 특정 카테고리만 교체하여 서비스 연속성 유지
         vectorStore.replaceCategory(normalizedCategory, newChunks);
+
+        // 청크 임베딩 계산 (교체 후 반드시 수행 — 없으면 벡터 검색 불가)
+        System.out.println("=== 청크 임베딩 계산 시작 (" + newChunks.size() + "개) ===");
+        newChunks.forEach(c -> vectorStore.computeAndStoreEmbedding(c));
+        System.out.println("=== 청크 임베딩 계산 완료 ===");
+
         semanticCacheService.invalidateCache(normalizedCategory); // 문서 변경 시 해당 카테고리 캐시 무효화
         System.out.println("=== 카테고리 재로딩 완료: " + (normalizedCategory.isEmpty() ? "(최상위)" : normalizedCategory)
                 + " / 추가 청크: " + newChunks.size()
@@ -475,18 +481,70 @@ public class aiService {
         // 기존 LLM1 호출 (입력이 최대 20개로 축소됨)
         return recommendArticleTitlesFromChunks(userPrompt, combined);
     }
-    private String extractCaptionFromChunks(List<chunkDTO> chunks) {
-        java.util.regex.Pattern pattern =
+    /**
+     * 청크 목록에서 질문과 가장 관련성 높은 별표/표 캡션을 추출한다.
+     * - 1순위: 질문 자체에 "별표N"/"표N" 직접 언급
+     * - 2순위: 별표를 언급하는 청크 중 질문 키워드와 가장 많이 겹치는 청크의 별표 선택
+     *          (첫 번째 매칭 반환 방식 → 오순위 버그 수정)
+     */
+    private String extractCaptionFromChunks(String question, List<chunkDTO> chunks) {
+        java.util.regex.Pattern captionPat =
                 java.util.regex.Pattern.compile("[<\\[\\(]?(별표|표)\\s*(\\d+)[>\\]\\)]?");
-        for (chunkDTO chunk : chunks) {
-            if (chunk.getText() == null) continue;
-            java.util.regex.Matcher m = pattern.matcher(chunk.getText());
-            if (m.find()) {
-                // "별표 3" → "별표3" 형태로 정규화
-                return m.group(1) + m.group(2);
+
+        // 1) 질문 자체에 별표N 직접 언급 → 최우선
+        if (question != null && !question.isBlank()) {
+            java.util.regex.Matcher qm = captionPat.matcher(question);
+            if (qm.find()) {
+                return qm.group(1).replaceAll("\\s+", "") + qm.group(2);
             }
         }
-        return null;
+
+        // 2) 청크별 별표 언급 추출 + 질문-청크 관련성 스코어로 최적 선택
+        Set<String> qTokens = extractTokens(question);
+        String bestCaption = null;
+        int bestScore = -1;
+
+        for (chunkDTO chunk : chunks) {
+            if (chunk.getText() == null) continue;
+            java.util.regex.Matcher m = captionPat.matcher(chunk.getText());
+            if (!m.find()) continue; // 별표 언급 없는 청크 스킵
+
+            String caption = m.group(1).replaceAll("\\s+", "") + m.group(2);
+
+            // 질문 토큰과 청크 제목·번호 겹침으로 관련성 스코어 계산
+            int score = countTokenOverlap(qTokens, chunk.getArticleTitle()) * 10
+                      + countTokenOverlap(qTokens, chunk.getArticleNumber()) * 5
+                      + countTokenOverlap(qTokens,
+                            chunk.getText().substring(0, Math.min(300, chunk.getText().length()))) * 2;
+
+            if (score > bestScore) {
+                bestScore = score;
+                bestCaption = caption;
+                System.out.println("[캡션선택] " + caption + " ← " + chunk.getArticleNumber()
+                        + " " + chunk.getArticleTitle() + " (score=" + score + ")");
+            }
+        }
+        return bestCaption;
+    }
+
+    private Set<String> extractTokens(String s) {
+        if (s == null || s.isBlank()) return Collections.emptySet();
+        String[] parts = s.split("[\\s,\\-_/()\\[\\]<>{}:;\"']+");
+        Set<String> set = new HashSet<>();
+        for (String p : parts) {
+            if (p.length() >= 2) set.add(p);
+        }
+        return set;
+    }
+
+    private int countTokenOverlap(Set<String> tokens, String text) {
+        if (tokens.isEmpty() || text == null || text.isBlank()) return 0;
+        Set<String> textTokens = extractTokens(text);
+        int count = 0;
+        for (String t : tokens) {
+            if (textTokens.contains(t)) count++;
+        }
+        return count;
     }
     /**
      * 2단계 질의: 추천받은 조항 이름에 해당하는 실제 청크 내용을 AI에 전달하여 최종 답변을 생성한다.
@@ -575,8 +633,8 @@ public class aiService {
             // 0225 김소연(수정): 1순위 캡션 직접 지목 → 2순위 벡터 유사도 top-2
             // 이유: <별표3> 같은 직접 언급은 정확하게 매핑, 없으면 셀 내용 의미로 top-2 선택
 
-            // 1순위: 청크 본문에서 "별표N" / "표N" 직접 언급 추출
-            String captionMention = extractCaptionFromChunks(relevantChunks);
+            // 1순위: 청크 본문에서 "별표N" / "표N" 직접 언급 추출 (질문 관련성 스코어 기반 최적 선택)
+            String captionMention = extractCaptionFromChunks(userPrompt, relevantChunks);
             List<com.example.cwmAi.dto.doc_DTO.TableDoc> tablesToAttach = new ArrayList<>();
 
             if (captionMention != null) {
@@ -791,30 +849,15 @@ public class aiService {
             // 3.쪽수만 있는 줄 제거
             text = text.replaceAll("(?m)^\\s*\\d+\\s*$", "");
 
-            // 4. 줄바꿈 정리: 조/장 경계를 보존하면서 문장 중간 줄바꿈은 공백으로 변환
-            // 조/장 패턴 앞의 줄바꿈은 유지하고, 나머지는 공백으로 변환
+            // 4. 줄바꿈 정리: 빈 줄만 제거하고 모든 줄 구조 유지
+            // 이유: 법령(제N조) 청킹과 업무매뉴얼(목차 번호) 청킹 모두 줄바꿈이 필요하기 때문
             String[] lines = text.split("\\n");
             StringBuilder cleanedText = new StringBuilder();
-            for (int i = 0; i < lines.length; i++) {
-                String line = lines[i].trim();
-                if (line.isEmpty()) {
-                    continue;
-                }
-
-                // 조/장 패턴으로 시작하는 줄인지 확인
-                boolean isArticleOrChapterStart = line.matches("^\\s*제\\s*\\d+[장조].*") ||
-                        line.matches("^\\s*제\\s*\\d+조의\\d+.*");
-
-                if (isArticleOrChapterStart && cleanedText.length() > 0) {
-                    // 조/장 시작 전에는 줄바꿈 유지
-                    cleanedText.append("\n").append(line);
-                } else {
-                    // 일반 줄은 공백으로 연결 (조항 내용이 여러 줄에 걸쳐 있을 때 유지)
-                    if (cleanedText.length() > 0 && !cleanedText.toString().endsWith("\n")) {
-                        cleanedText.append(" ");
-                    }
-                    cleanedText.append(line);
-                }
+            for (String line : lines) {
+                String trimmed = line.trim();
+                if (trimmed.isEmpty()) continue;
+                if (cleanedText.length() > 0) cleanedText.append("\n");
+                cleanedText.append(trimmed);
             }
             text = cleanedText.toString();
 
@@ -896,6 +939,8 @@ public class aiService {
                                     List<com.example.cwmAi.dto.doc_DTO.TableDoc> tables =
                                             structuredDocumentParser.extractTablesAsTableDocs(filePath.toFile(), fileName, fileCategory);
                                     tableStore.replaceByFile(fileCategory, fileName, tables);
+                                    // 표 임베딩 계산 (replaceByFile 후 즉시 — 없으면 벡터 기반 표 검색 불가)
+                                    if (tables != null) tables.forEach(t -> tableStore.computeAndStoreEmbedding(t));
                                     System.out.println("[표저장] file=" + fileName + ", category=" + fileCategory + ", tables=" + (tables == null ? 0 : tables.size()));
                                 } catch (Exception ex) {
                                     System.err.println("[표저장] 실패 file=" + fileName + " / " + ex.getMessage());
@@ -903,7 +948,8 @@ public class aiService {
                             }
 
                             // 0224 김소연(수정): 청크는 기존 텍스트 기반 청킹만 수행(표 병합 없음)
-                            List<chunkDTO> chunks = documentChunker.chunkText(fileNameLower, content, fileCategory);
+                            // fileName(원본 대소문자) 전달 — fileNames 필터와 대소문자 일치시키기 위함
+                            List<chunkDTO> chunks = documentChunker.chunkText(fileName, content, fileCategory);
 
                             for (chunkDTO chunk : chunks) {
                                 String categoryForId = (chunk.getCategory() != null && !chunk.getCategory().isBlank())
@@ -997,11 +1043,16 @@ public class aiService {
      * - MANUAL: 유사도 임계값 0.70 (구어체 표현 커버)
      * LLM 호출 없음 → ms 단위 응답
      */
-    private List<chunkDTO> filterChunksByType(String question, String category, String chunkType) {
-        float threshold = "MANUAL".equals(chunkType) ? 0.70f : 0.80f;
+    // LAW: top-20, MANUAL: top-5 (컨텍스트 최소화 → 속도 개선)
+    private static final int LAW_TOP_K    = 20;
+    private static final int MANUAL_TOP_K = 5;
 
-        // 1) 벡터 검색 (유형 필터 + 임계값)
-        List<chunkDTO> vectorResults = vectorStore.searchByVector(question, 10, category, chunkType, threshold);
+    private List<chunkDTO> filterChunksByType(String question, String category, String chunkType) {
+        int topK = "MANUAL".equals(chunkType) ? MANUAL_TOP_K : LAW_TOP_K;
+        float threshold = "MANUAL".equals(chunkType) ? 0.70f : 0.78f;
+
+        // 1) 벡터 검색
+        List<chunkDTO> vectorResults = vectorStore.searchByVector(question, topK, category, chunkType, threshold);
 
         // 2) 키워드 보완 검색
         Set<String> keywords = extractKeywords(question);
@@ -1011,8 +1062,7 @@ public class aiService {
                 String ct = c.getChunkType() != null ? c.getChunkType() : "LAW";
                 if (!chunkType.equals(ct)) continue;
                 String target = (c.getArticleTitle() != null ? c.getArticleTitle() : "")
-                        + " " + (c.getText() != null
-                        ? c.getText().substring(0, Math.min(300, c.getText().length())) : "");
+                        + " " + (c.getText() != null ? c.getText() : "");
                 for (String kw : keywords) {
                     if (target.contains(kw)) { keywordResults.add(c); break; }
                 }
@@ -1031,9 +1081,9 @@ public class aiService {
         }
 
         List<chunkDTO> result = new ArrayList<>(merged.values());
-        if (result.size() > 10) result = result.subList(0, 10);
-        System.out.printf("[%s검색] 벡터%d + 키워드 → %d개 청크%n",
-                chunkType, vectorResults.size(), result.size());
+        if (result.size() > topK) result = result.subList(0, topK);
+        System.out.printf("[%s검색] 벡터%d + 키워드 → %d개 청크 (top%d)%n",
+                chunkType, vectorResults.size(), result.size(), topK);
         return result;
     }
 
@@ -1089,12 +1139,13 @@ public class aiService {
         List<messageDTO> messages = new ArrayList<>();
         messages.add(new messageDTO("system",
                 """
-                너는 법령 조항을 분석하는 전문가다.
+                너는 법령 조항과 업무매뉴얼 섹션을 분석하는 전문가다.
                 중요 규칙:
                 1. 반드시 JSON 배열 형식으로만 답변한다. 예: ["조항이름1", "조항이름2"]
-                2. 조항 이름은 제공된 목록에서 정확히 선택해야 한다.
+                2. 이름은 제공된 목록에서 정확히 선택해야 한다.
                 3. 2개 이상 7개 이하로 추천한다.
                 4. 한글로만 답변한다.
+                5. 업무매뉴얼 섹션이 더 관련 있으면 법령보다 우선 선택한다.
                 """));
         messages.add(new messageDTO("user", String.format(
                 "사용자 질문: %s 조항 이름 목록:%s " +

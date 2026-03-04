@@ -108,12 +108,14 @@ public class TableStoreInMemory {
     public Optional<TableDoc> findByCaption(String caption, String category) {
         if (caption == null || caption.isBlank()) return Optional.empty();
         String c = normalize(category);
-        String cap = caption.trim();
+        // 공백 제거 정규화: "별표 3" == "별표3" 동일하게 취급
+        String cap = caption.trim().replaceAll("\\s+", "");
         rwLock.readLock().lock();
         try {
             return store.stream()
                     .filter(t -> c.isEmpty() || normalize(t.getCategory()).equals(c))
-                    .filter(t -> t.getCaption() != null && t.getCaption().trim().equals(cap))
+                    .filter(t -> t.getCaption() != null &&
+                            t.getCaption().trim().replaceAll("\\s+", "").equals(cap))
                     .findFirst();
         } finally {
             rwLock.readLock().unlock();

@@ -306,8 +306,7 @@
 
     // ── O/X 피드백 버튼 렌더링 ──────────────────────────────────────
     // pendingKey: 서버에서 받은 임시 캐시 키
-    // onReject: X 눌렀을 때 재생성 콜백
-    function renderFeedbackButtons(pendingKey, onReject) {
+    function renderFeedbackButtons(pendingKey) {
         const feedbackArea = document.createElement('div');
         feedbackArea.classList.add('feedback-area');
 
@@ -341,8 +340,7 @@
             await fetch(`/lm/api/feedback?pendingKey=${encodeURIComponent(pendingKey)}&approved=false`, { method: 'POST' });
             okBtn.style.display = 'none';
             ngBtn.style.display = 'none';
-            resultText.textContent = '답변을 다시 생성합니다...';
-            if (onReject) onReject();
+            resultText.textContent = '저장되지 않았습니다. 필요하면 다시 질문해 주세요.';
         });
 
         feedbackArea.appendChild(label);
@@ -408,36 +406,7 @@
         typeMessage(textSpan, ': ' + answer, () => {
             // 타이핑 완료 후 O/X 피드백 버튼 표시
             if (pendingKey) {
-                const feedbackArea = renderFeedbackButtons(pendingKey, async () => {
-                    // X 클릭 → 답변 재생성
-                    const reloadDiv = document.createElement('div');
-                    reloadDiv.classList.add('message', 'ai', 'loading');
-                    const reloadAvatar = document.createElement('img');
-                    reloadAvatar.src = '/images/Cw_ci.png';
-                    reloadAvatar.alt = 'AI';
-                    reloadAvatar.classList.add('ai-avatar');
-                    reloadAvatar.onerror = function() { this.style.display = 'none'; };
-                    const reloadContent = document.createElement('div');
-                    reloadContent.classList.add('message-content');
-                    const reloadText = document.createElement('span');
-                    reloadText.textContent = '답변을 다시 생성중입니다';
-                    reloadContent.appendChild(reloadText);
-                    reloadDiv.appendChild(reloadAvatar);
-                    reloadDiv.appendChild(reloadContent);
-                    chatBox.appendChild(reloadDiv);
-                    chatBox.scrollTop = chatBox.scrollHeight;
-                    const reIntervalRef = { id: startDotAnimation(reloadText, '답변을 다시 생성중입니다') };
-                    try {
-                        await processQuestion(question, category, selectedFilesArray, reloadDiv, reloadText, reIntervalRef);
-                    } catch (e) {
-                        clearInterval(reIntervalRef.id);
-                        chatBox.removeChild(reloadDiv);
-                        const { messageDiv: errDiv, textSpan: errSpan } = createAiMessageDiv();
-                        errSpan.textContent = `재생성 오류: ${e.message}`;
-                        chatBox.appendChild(errDiv);
-                        sendBtn.disabled = false;
-                    }
-                });
+                const feedbackArea = renderFeedbackButtons(pendingKey);
                 chatBox.appendChild(feedbackArea);
             }
             sendBtn.disabled = false;

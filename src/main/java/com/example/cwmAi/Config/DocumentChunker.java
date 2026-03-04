@@ -113,17 +113,22 @@ public class DocumentChunker {
         }
 
         System.out.println("발견된 조항 수: " + articlePositions.size());
-        // 0226 김소연(수정): 조항 유무 관계없이 목차 청킹 항상 병행
-        // 이유: 업무매뉴얼은 조항 포함 + 목차 단위 내용이 공존 → 둘 다 청킹 필요
-        List<chunkDTO> tocChunks = chunkByTableOfContents(fileName, text, category, lawName);
-        if (!tocChunks.isEmpty()) {
-            tocChunks.forEach(c -> c.setChunkType(chunkType));
-            System.out.println("[청킹] 목차 청크 " + tocChunks.size() + "개 추가 (유형: " + chunkType + ")");
-            chunks.addAll(tocChunks);
-        }
 
         if (articlePositions.isEmpty()) {
-            System.out.println("=== 청킹 완료: 총 " + chunks.size() + "개 청크(목차 전용) ===");
+            // 조항(제N조)이 없을 때만 목차 청킹 시도 (법령 파일에 TOC 청크 생성 방지)
+            List<chunkDTO> tocChunks = chunkByTableOfContents(fileName, text, category, lawName);
+            if (!tocChunks.isEmpty()) {
+                tocChunks.forEach(c -> c.setChunkType(chunkType));
+                System.out.println("[청킹] 목차 청크 " + tocChunks.size() + "개 추가 (유형: " + chunkType + ")");
+                chunks.addAll(tocChunks);
+            }
+            // fallback: 목차도 없으면 줄 단위 문단 청킹
+            if (chunks.isEmpty()) {
+                List<chunkDTO> fallbackChunks = chunkByParagraph(fileName, text, category, lawName, chunkType);
+                System.out.println("[fallback 문단청킹] " + fallbackChunks.size() + "개 청크 추가");
+                chunks.addAll(fallbackChunks);
+            }
+            System.out.println("=== 청킹 완료: 총 " + chunks.size() + "개 청크(목차/fallback 전용) ===");
             return chunks;
         }
 
@@ -438,6 +443,53 @@ public class DocumentChunker {
             System.out.println("[목차청크 #" + (i+1) + "] " + numbers.get(i)
                     + " - " + titles.get(i) + " (" + sectionText.length() + "자)");
         }
+        return chunks;
+    }
+
+    // fallback: 줄 단위로 나누고, 500자 단위로 묶어서 청킹
+    // 이유: extractTextFromPdf가 단일 \n만 생성하므로 \n\n 분할 대신 줄 단위로 누적
+    private List<chunkDTO> chunkByParagraph(
+            String fileName, String text, String category, String lawName, String chunkType) {
+
+        List<chunkDTO> chunks = new ArrayList<>();
+        String[] lines = text.split("\\n");
+
+        StringBuilder buffer = new StringBuilder();
+        int idx = 0;
+
+        for (String line : lines) {
+            String trimmed = line.trim();
+            if (trimmed.isEmpty()) continue;
+
+            buffer.append(trimmed).append("\n");
+
+            // 500자 이상이면 청크로 확정
+            if (buffer.length() >= 500) {
+                String chunkText = buffer.toString().trim();
+                String title = chunkText.substring(0, Math.min(40, chunkText.length())).replaceAll("\\s+", " ");
+                chunkDTO dto = new chunkDTO(
+                        lawName, "", String.valueOf(idx), title,
+                        chunkText, null, fileName, idx, category
+                );
+                dto.setChunkType(chunkType);
+                chunks.add(dto);
+                idx++;
+                buffer.setLength(0);
+            }
+        }
+
+        // 남은 buffer 처리
+        if (buffer.length() >= 50) {
+            String chunkText = buffer.toString().trim();
+            String title = chunkText.substring(0, Math.min(40, chunkText.length())).replaceAll("\\s+", " ");
+            chunkDTO dto = new chunkDTO(
+                    lawName, "", String.valueOf(idx), title,
+                    chunkText, null, fileName, idx, category
+            );
+            dto.setChunkType(chunkType);
+            chunks.add(dto);
+        }
+
         return chunks;
     }
 

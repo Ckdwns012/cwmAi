@@ -272,11 +272,9 @@ public class VectorStoreInMemory {
                 if (chunk.getLawName() == null || chunk.getLawName().trim().isEmpty() || chunk.getLawName().equals("알 수 없음")) {
                     errors.add("법령명이 없거나 유효하지 않음: " + chunk.getLawName());
                 }
-                // 조항 번호 검증
+                // 조항 번호 검증 (형식 비교 제거 — 법령/목차/템플릿 모두 허용)
                 if (chunk.getArticleNumber() == null || chunk.getArticleNumber().trim().isEmpty()) {
                     errors.add("조항 번호가 없음");
-                } else if (!chunk.getArticleNumber().matches("제\\s*\\d+(?:조(?:의\\s*\\d+)?)?")) {
-                    errors.add("조항 번호 형식이 올바르지 않음: " + chunk.getArticleNumber());
                 }
                 // 조항 이름 검증
                 if (chunk.getArticleTitle() == null || chunk.getArticleTitle().trim().isEmpty()) {
