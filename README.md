@@ -174,6 +174,8 @@ java -jar build/libs/cwmAi-0.0.1-SNAPSHOT.jar
 - Ollama 서버가 실행 중인지 확인: `ollama serve`
 - 포트 11434가 사용 가능한지 확인
 - 모델이 설치되어 있는지 확인: `ollama list`
+- ollma context_lenth 설정 : 
+  export OLLAMA_CONTEXT_LENGTH=16384 ollama serve
 
 ### 빌드 오류
 
