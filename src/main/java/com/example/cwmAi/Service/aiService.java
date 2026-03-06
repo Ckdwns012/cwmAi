@@ -9,6 +9,7 @@ import io.netty.handler.timeout.WriteTimeoutHandler;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.text.PDFTextStripper;
 import org.springframework.http.client.reactive.ReactorClientHttpConnector;
+import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.client.WebClient;
 
@@ -31,6 +32,7 @@ import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
+import java.util.Objects;
 
 @Service("aiService")
 public class aiService {
@@ -39,7 +41,8 @@ public class aiService {
        설정값
      ========================= */
     private static final String OLLAMA_BASE_URL = "http://localhost:11434/api";
-    private static final String MODEL_NAME = "exaone3.5:2.4b";
+    private static final String MODEL_NAME = "qwen3:4b-instruct-2507-q4_K_M";
+//    private static final String MODEL_NAME = "exaone3.5:2.4b";
     // JAR 파일 실행 위치 기준 상대 경로 (uploads 폴더)
     private static final String UPLOAD_DIR;
 
@@ -302,10 +305,27 @@ public class aiService {
                 + " / 전체 청크: " + vectorStore.getSize() + " ===");
     }
     /**
+     * PDF 파싱 + 임베딩을 백그라운드 스레드에서 수행 (업로드 요청 즉시 응답용)
+     */
+    @Async("documentProcessingExecutor")
+    public void reloadCategoryAsync(String category) {
+        System.out.println("[Async] 백그라운드 재로딩 시작: " + category);
+        reloadCategory(category);
+        System.out.println("[Async] 백그라운드 재로딩 완료: " + category);
+    }
+
+    /**
+     * 특정 파일을 참조한 캐시 항목만 무효화 (파일 삭제 시 호출)
+     */
+    public void invalidateCacheByFile(String fileName, String category) {
+        semanticCacheService.invalidateCacheByFile(fileName, category);
+    }
+
+    /**
      * chunkId를 포함한 새로운 청크를 생성한다.
      */
     private chunkDTO createChunkWithId(chunkDTO originalChunk, String chunkId) {
-        return new chunkDTO(
+        chunkDTO newChunk = new chunkDTO(
                 originalChunk.getLawName(),
                 originalChunk.getChapterTitle(),
                 originalChunk.getArticleNumber(),
@@ -316,6 +336,8 @@ public class aiService {
                 originalChunk.getChunkIndex(),
                 originalChunk.getCategory()
         );
+        newChunk.setChunkType(originalChunk.getChunkType()); // chunkType(LAW/MANUAL) 반드시 복사
+        return newChunk;
     }
 
     // ──0224 김소연(수정) askModel() 메서드 교체 ──────────────────────────
@@ -347,6 +369,20 @@ public class aiService {
     //                 : generateFinalAnswer(userPrompt, titles, category))
     //             .doOnSuccess(a -> { if (a != null && !a.isBlank()) semanticCacheService.cacheAnswer(userPrompt, a, category); });
     // }
+
+    /** 디버그: 카테고리 내 모든 청크 제목 목록 반환 */
+    public List<Map<String, String>> getChunkTitlesForDebug(String category) {
+        return vectorStore.getChunksByCategory(category).stream()
+                .map(c -> {
+                    Map<String, String> m = new LinkedHashMap<>();
+                    m.put("file", c.getFileName());
+                    m.put("type", c.getChunkType() != null ? c.getChunkType() : "LAW");
+                    m.put("title", c.getArticleTitle() != null ? c.getArticleTitle() : "(제목없음)");
+                    m.put("article", c.getArticleNumber() != null ? c.getArticleNumber() : "");
+                    return m;
+                })
+                .collect(Collectors.toList());
+    }
 
     // 0226 김소연(수정): askModel v2 - 벡터+키워드 top-50 필터링 후 LLM 1단계
     // 이유: 전체 조항 목록 → LLM 방식 대비 토큰 절감, 속도 개선
@@ -442,19 +478,27 @@ public class aiService {
     public Mono<List<String>> recommendArticleTitles(String userPrompt, String category, List<String> fileNames) {
         System.out.printf("[1단계] LAW/MANUAL 분리 벡터 검색 시작 - 카테고리: %s%n", category);
 
-        // LAW / MANUAL 각각 top-10 검색
-        List<chunkDTO> lawChunks    = filterChunksByType(userPrompt, category, "LAW");
-        List<chunkDTO> manualChunks = filterChunksByType(userPrompt, category, "MANUAL");
+        List<chunkDTO> lawChunks;
+        List<chunkDTO> manualChunks;
 
-        // fileNames 필터 적용
         if (fileNames != null && !fileNames.isEmpty()) {
+            // 파일 선택 시: 해당 파일의 모든 청크를 직접 가져옴 (벡터 top-K 제한 없이)
             Set<String> fileSet = new HashSet<>(fileNames);
-            lawChunks    = lawChunks.stream()
-                    .filter(c -> fileSet.contains(c.getFileName()))
+            List<chunkDTO> allCategoryChunks = vectorStore.getChunksByCategory(category);
+            lawChunks = allCategoryChunks.stream()
+                    .filter(c -> fileSet.contains(c.getFileName()) &&
+                            "LAW".equals(c.getChunkType() != null ? c.getChunkType() : "LAW"))
                     .collect(Collectors.toList());
-            manualChunks = manualChunks.stream()
-                    .filter(c -> fileSet.contains(c.getFileName()))
+            manualChunks = allCategoryChunks.stream()
+                    .filter(c -> fileSet.contains(c.getFileName()) &&
+                            "MANUAL".equals(c.getChunkType()))
                     .collect(Collectors.toList());
+            System.out.printf("[1단계] 파일 직접 검색 - 선택파일:%s → LAW:%d MANUAL:%d%n",
+                    fileNames, lawChunks.size(), manualChunks.size());
+        } else {
+            // 파일 미선택 시: 벡터+키워드 하이브리드 검색
+            lawChunks    = filterChunksByType(userPrompt, category, "LAW");
+            manualChunks = filterChunksByType(userPrompt, category, "MANUAL");
         }
 
         // 병합 (MANUAL 우선 — 업무매뉴얼이 있으면 앞쪽에, 중복 제거)
@@ -564,6 +608,11 @@ public class aiService {
 
         System.out.println("[2단계] 추천받은 조항 이름에 해당하는 청크 수: " + relevantChunks.size());
 
+        // 참조 파일명 수집 (캐시 저장 + 답변 끝 표시용)
+        Set<String> sourceFiles = relevantChunks.stream()
+                .map(chunkDTO::getFileName)
+                .filter(Objects::nonNull)
+                .collect(Collectors.toCollection(LinkedHashSet::new));
 
         // 청크를 LAW / MANUAL 로 분리
         List<chunkDTO> lawChunks = new ArrayList<>();
@@ -677,13 +726,17 @@ public class aiService {
         System.out.println("========================================");
         System.out.println("===== [2단계] 최종 답변 생성 요청 =====");
         System.out.println("========================================");
-        System.out.println("사용된 청크 수: " + relevantChunks.size());
+        System.out.println("사용된 청크 수: " + relevantChunks.size()
+                + "  (LAW:" + lawChunks.size() + " / MANUAL:" + manualChunks.size() + ")");
         System.out.println("\n--- [2단계] 사용된 청크 정보 ---");
         for (int i = 0; i < relevantChunks.size(); i++) {
             chunkDTO chunk = relevantChunks.get(i);
-            System.out.println((i + 1) + ". " + chunk.getLawName() + " " +
-                    chunk.getArticleNumber() + " " + chunk.getArticleTitle() +
-                    " (청크ID: " + chunk.getChunkId() + ")");
+            String type = "MANUAL".equals(chunk.getChunkType()) ? "MANUAL" : "LAW";
+            System.out.printf("  [%2d] %-6s | %-30s | %s %s%n",
+                    i + 1, type,
+                    chunk.getArticleTitle() != null ? chunk.getArticleTitle() : "(제목없음)",
+                    chunk.getLawName() != null ? chunk.getLawName() : "",
+                    chunk.getChunkId() != null ? "(ID:" + chunk.getChunkId() + ")" : "");
         }
         System.out.println("\n--- [2단계] AI 요청 내용 ---");
         System.out.println("URL: " + OLLAMA_BASE_URL + "/chat");
@@ -729,6 +782,11 @@ public class aiService {
                         if (content != null && !content.trim().isEmpty()) {
                             // 가독성을 위해 #과 * 특수문자 제거
                             String cleanedContent = content.replace("#", "").replace("*", "");
+
+                            // 참조 파일 표시 추가
+                            if (!sourceFiles.isEmpty()) {
+                                cleanedContent += "\n\n[참조 파일: " + String.join(", ", sourceFiles) + "]";
+                            }
 
                             System.out.println("--- [2단계] 최종 답변 (원본) ---");
                             System.out.println("길이: " + content.length() + "자");
@@ -1044,46 +1102,59 @@ public class aiService {
      * LLM 호출 없음 → ms 단위 응답
      */
     // LAW: top-20, MANUAL: top-5 (컨텍스트 최소화 → 속도 개선)
-    private static final int LAW_TOP_K    = 20;
-    private static final int MANUAL_TOP_K = 5;
+    private static final int LAW_TOP_K    = 30;
+    private static final int MANUAL_TOP_K = 10;
 
     private List<chunkDTO> filterChunksByType(String question, String category, String chunkType) {
         int topK = "MANUAL".equals(chunkType) ? MANUAL_TOP_K : LAW_TOP_K;
-        float threshold = "MANUAL".equals(chunkType) ? 0.70f : 0.78f;
+        float threshold = "MANUAL".equals(chunkType) ? 0.65f : 0.75f;
 
         // 1) 벡터 검색
         List<chunkDTO> vectorResults = vectorStore.searchByVector(question, topK, category, chunkType, threshold);
 
-        // 2) 키워드 보완 검색
+        // 2) 키워드 보완 검색 — 매칭 키워드 개수로 점수화 후 정렬 (스토어 순서 의존 제거)
         Set<String> keywords = extractKeywords(question);
         List<chunkDTO> keywordResults = new ArrayList<>();
         if (!keywords.isEmpty()) {
+            List<Map.Entry<chunkDTO, Integer>> scored = new ArrayList<>();
             for (chunkDTO c : vectorStore.getChunksByCategory(category)) {
                 String ct = c.getChunkType() != null ? c.getChunkType() : "LAW";
                 if (!chunkType.equals(ct)) continue;
-                String target = (c.getArticleTitle() != null ? c.getArticleTitle() : "")
-                        + " " + (c.getText() != null ? c.getText() : "");
+                String titlePart = c.getArticleTitle() != null ? c.getArticleTitle() : "";
+                String textPart  = c.getText() != null ? c.getText() : "";
+                int score = 0;
                 for (String kw : keywords) {
-                    if (target.contains(kw)) { keywordResults.add(c); break; }
+                    if (titlePart.contains(kw)) score += 2; // 제목 매칭 가중치 2배
+                    else if (textPart.contains(kw)) score += 1;
                 }
+                if (score > 0) scored.add(Map.entry(c, score));
             }
+            // 점수 내림차순 정렬 → 관련도 높은 청크가 top-K에 먼저 들어감
+            scored.sort((a, b) -> b.getValue() - a.getValue());
+            for (Map.Entry<chunkDTO, Integer> e : scored) keywordResults.add(e.getKey());
         }
 
-        // 3) 합집합 (중복 제거, chunkId null 방어)
+        // 3) 합집합 (벡터 우선, 키워드 보완 — 중복 제거)
+        // 벡터 결과는 searchByVector에서 이미 topK 제한됨
+        // 키워드 전용 결과는 topK만큼 추가 허용 → 합계 최대 2*topK
         Map<String, chunkDTO> merged = new LinkedHashMap<>();
         for (chunkDTO c : vectorResults) {
             String key = c.getChunkId() != null ? c.getChunkId() : c.getFileName() + "_" + c.getChunkIndex();
             merged.put(key, c);
         }
+        int keywordAdded = 0;
         for (chunkDTO c : keywordResults) {
             String key = c.getChunkId() != null ? c.getChunkId() : c.getFileName() + "_" + c.getChunkIndex();
-            merged.putIfAbsent(key, c);
+            if (!merged.containsKey(key)) {
+                merged.put(key, c);
+                keywordAdded++;
+                if (keywordAdded >= topK) break; // 키워드 전용 추가는 topK까지
+            }
         }
 
         List<chunkDTO> result = new ArrayList<>(merged.values());
-        if (result.size() > topK) result = result.subList(0, topK);
-        System.out.printf("[%s검색] 벡터%d + 키워드 → %d개 청크 (top%d)%n",
-                chunkType, vectorResults.size(), result.size(), topK);
+        System.out.printf("[%s검색] 벡터%d + 키워드추가%d → 합계%d개%n",
+                chunkType, vectorResults.size(), keywordAdded, result.size());
         return result;
     }
 
@@ -1121,18 +1192,57 @@ public class aiService {
     // 0226 김소연(수정): 필터링된 청크 기준 LLM 1단계 (기존 recommendArticleTitles와 동일 구조)
     // 이유: 전체 목록이 아닌 top-50 필터 청크의 조항 이름만 LLM에 전달 → 토큰 절감
     private Mono<List<String>> recommendArticleTitlesFromChunks(String userPrompt, List<chunkDTO> chunks) {
+        // ── [1단계] 입력 청크 전체 출력 ────────────────────────────────────────
+        System.out.println("========================================");
+        System.out.println("===== [1단계] LLM1 입력 청크 목록 =====");
+        System.out.println("========================================");
+        System.out.println("총 " + chunks.size() + "개 청크");
+        int lawCnt = 0, manualCnt = 0;
+        for (int i = 0; i < chunks.size(); i++) {
+            chunkDTO c = chunks.get(i);
+            String type = "MANUAL".equals(c.getChunkType()) ? "MANUAL" : "LAW";
+            if ("MANUAL".equals(type)) manualCnt++; else lawCnt++;
+            System.out.printf("  [%2d] %-6s | %-30s | %s%n",
+                    i + 1, type,
+                    c.getArticleTitle() != null ? c.getArticleTitle() : "(제목없음)",
+                    c.getChunkId() != null ? c.getChunkId() : "-");
+        }
+        System.out.println("  → LAW:" + lawCnt + "개  MANUAL:" + manualCnt + "개");
+        System.out.println("========================================");
+
+        // MANUAL 청크를 목록 앞쪽에 배치 → 소형 모델이 앞쪽을 우선 선택하는 경향 활용
         Map<String, String> titleToId = new LinkedHashMap<>();
-        for (chunkDTO c : chunks) {
-            String title = c.getArticleTitle();
-            if (title != null && !title.isBlank() && !titleToId.containsKey(title))
-                titleToId.put(title, c.getChunkId());
+        for (chunkDTO c : chunks) { // MANUAL 먼저
+            if ("MANUAL".equals(c.getChunkType())) {
+                String title = c.getArticleTitle();
+                if (title != null && !title.isBlank() && !titleToId.containsKey(title))
+                    titleToId.put(title, c.getChunkId());
+            }
+        }
+        for (chunkDTO c : chunks) { // LAW 나중
+            if (!"MANUAL".equals(c.getChunkType())) {
+                String title = c.getArticleTitle();
+                if (title != null && !title.isBlank() && !titleToId.containsKey(title))
+                    titleToId.put(title, c.getChunkId());
+            }
         }
         if (titleToId.isEmpty()) return Mono.just(new ArrayList<>());
+
+        // [매뉴얼]/[법령] 태그 붙여서 LLM이 구분 가능하게 표시
+        // ※ 태그는 표시용 — 파싱 시 제거하므로 Stage 2 제목 매칭에 영향 없음
+        Map<String, String> titleTag = new LinkedHashMap<>(); // title → tag("매뉴얼"/"법령")
+        for (chunkDTO c : chunks) {
+            String title = c.getArticleTitle();
+            if (title != null && !title.isBlank() && !titleTag.containsKey(title))
+                titleTag.put(title, "MANUAL".equals(c.getChunkType()) ? "매뉴얼" : "법령");
+        }
 
         List<String> titles = new ArrayList<>(titleToId.keySet());
         StringBuilder titlesText = new StringBuilder();
         for (int i = 0; i < titles.size(); i++) {
-            titlesText.append((i + 1)).append(". ").append(titles.get(i));
+            String title = titles.get(i);
+            String tag = titleTag.getOrDefault(title, "법령");
+            titlesText.append((i + 1)).append(". [").append(tag).append("] ").append(title);
             if (i < titles.size() - 1) titlesText.append(" ");
         }
 
@@ -1142,17 +1252,17 @@ public class aiService {
                 너는 법령 조항과 업무매뉴얼 섹션을 분석하는 전문가다.
                 중요 규칙:
                 1. 반드시 JSON 배열 형식으로만 답변한다. 예: ["조항이름1", "조항이름2"]
-                2. 이름은 제공된 목록에서 정확히 선택해야 한다.
+                2. 이름은 제공된 목록에서 정확히 선택해야 한다. [매뉴얼]/[법령] 태그는 포함하지 않는다.
                 3. 2개 이상 7개 이하로 추천한다.
                 4. 한글로만 답변한다.
-                5. 업무매뉴얼 섹션이 더 관련 있으면 법령보다 우선 선택한다.
+                5. [매뉴얼] 항목이 질문과 관련 있으면 반드시 우선 선택한다.
                 """));
         messages.add(new messageDTO("user", String.format(
-                "사용자 질문: %s 조항 이름 목록:%s " +
-                "질문과 가장 관련 높은 조항 이름을 2~7개 JSON 배열로만 답변하세요.",
+                "사용자 질문: %s\n조항 목록(앞쪽 [매뉴얼] 항목 우선):%s\n" +
+                "질문과 가장 관련 높은 조항 이름을 2~7개 JSON 배열로만 답변하세요. 태그([매뉴얼],[법령])는 제외하고 이름만 작성하세요.",
                 userPrompt, titlesText)));
 
-        System.out.println("[1단계] 필터링된 조항 수: " + titles.size() + "개 → LLM 전달");
+        System.out.println("[1단계] 필터링된 조항 수: " + titles.size() + "개 → LLM 전달 (MANUAL 앞배치)");
 
         return webClient.post().uri("/chat")
                 .header("Content-Type", "application/json")
@@ -1168,8 +1278,34 @@ public class aiService {
                         if (s >= 0 && e > s) c = c.substring(s, e + 1);
                         @SuppressWarnings("unchecked")
                         List<String> res = objectMapper.readValue(c, List.class);
-                        System.out.println("[1단계] 추천 조항: " + res);
-                        return res;
+
+                        // LLM이 반환한 제목을 titleToId의 실제 저장 제목으로 교정
+                        // 이유: LLM이 제목을 약간 수정하면 Stage 2 exact-match가 실패해 청크 0개 반환
+                        List<String> corrected = new ArrayList<>();
+                        for (String llmTitle : res) {
+                            String t = llmTitle.trim();
+                            if (titleToId.containsKey(t)) {
+                                corrected.add(t); // 정확히 일치
+                            } else {
+                                // 퍼지 매칭: contains 방향 양쪽 검사
+                                String best = null;
+                                for (String stored : titleToId.keySet()) {
+                                    if (stored.contains(t) || t.contains(stored)) {
+                                        best = stored;
+                                        break;
+                                    }
+                                }
+                                if (best != null) {
+                                    System.out.println("[1단계] 제목 교정: \"" + t + "\" → \"" + best + "\"");
+                                    corrected.add(best);
+                                } else {
+                                    System.out.println("[1단계] 매칭 실패 (원본 유지): \"" + t + "\"");
+                                    corrected.add(t);
+                                }
+                            }
+                        }
+                        System.out.println("[1단계] 추천 조항 (교정 후): " + corrected);
+                        return corrected;
                     } catch (Exception ex) {
                         System.err.println("[1단계] 파싱 오류: " + ex.getMessage());
                         return new ArrayList<String>();

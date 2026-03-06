@@ -65,11 +65,11 @@ public class uploadController {
         }
     }
     private static final List<String> DEFAULT_CATEGORIES = List.of(
-            "계약",
-            "개인정보보호",
-            "정보보안",
-            "정보화사업",
-            "공제사업"
+            "경영전략",
+            "고객복지",
+            "정보화",
+            "퇴직공제",
+            "회계총무"
     );
 
     /**
@@ -203,10 +203,11 @@ public class uploadController {
 
             Files.copy(file.getInputStream(), destPath, StandardCopyOption.REPLACE_EXISTING);
 
-            // 재로딩
-            aiService.reloadCategory(category);
+            // 비동기 재로딩: 파일 저장 후 즉시 응답, 백그라운드에서 파싱+임베딩 처리
+            aiService.reloadCategoryAsync(category);
 
-            return new UploadResponse("success", "파일 업로드 성공: " + filename);
+            return new UploadResponse("success",
+                    "파일 저장 완료: " + filename + "\n백그라운드에서 분석 중입니다. 잠시 후 검색에 반영됩니다.");
         } catch (IllegalArgumentException e) {
             return new UploadResponse("error", "요청 값이 올바르지 않습니다: " + e.getMessage());
         } catch (IOException e) {
@@ -361,8 +362,10 @@ public class uploadController {
 
             Files.delete(targetPath);
 
-            // 삭제 후 재로딩
-            aiService.reloadCategory(category);
+            // 해당 파일을 참조한 캐시 항목 먼저 제거 (카테고리 전체 삭제보다 정밀)
+            aiService.invalidateCacheByFile(filename, category);
+            // 비동기 재로딩
+            aiService.reloadCategoryAsync(category);
             return "삭제 성공: " + filename;
 
         } catch (IllegalArgumentException e) {

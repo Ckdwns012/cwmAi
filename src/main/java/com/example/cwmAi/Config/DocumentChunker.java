@@ -114,8 +114,9 @@ public class DocumentChunker {
 
         System.out.println("발견된 조항 수: " + articlePositions.size());
 
-        if (articlePositions.isEmpty()) {
-            // 조항(제N조)이 없을 때만 목차 청킹 시도 (법령 파일에 TOC 청크 생성 방지)
+        if (articlePositions.isEmpty() || isManual) {
+            // MANUAL 문서는 조항 패턴 오인식 방지를 위해 무조건 목차/fallback 청킹 사용
+            // (법령 참조 "외국인근로자법\n제13조" 등이 줄 시작으로 추출될 때 오작동 방지)
             List<chunkDTO> tocChunks = chunkByTableOfContents(fileName, text, category, lawName);
             if (!tocChunks.isEmpty()) {
                 tocChunks.forEach(c -> c.setChunkType(chunkType));
@@ -406,7 +407,7 @@ public class DocumentChunker {
 
         // "01 제목", "1. 제목", "I. 제목" 등 다양한 목차 번호 패턴
         Pattern tocPattern = Pattern.compile(
-                "(?m)^[ \t]*(\\d{1,2}|[IVXivx]{1,4})(?:\\.|[ \t])[ \t]*([가-힣A-Za-z][^\n]{1,50})$"
+                "(?m)^[ \t]*(\\d{1,2}|[IVXivx]{1,4})(?:\\.|[ \t])[ \t]*([가-힣A-Za-z][^\n]{1,100})$"
         );
         Matcher tocMatcher = tocPattern.matcher(text);
 

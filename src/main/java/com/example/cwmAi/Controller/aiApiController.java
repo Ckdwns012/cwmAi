@@ -87,6 +87,15 @@ public class aiApiController {
                 });
     }
 
+    /** 디버그: 카테고리 내 전체 청크 목록 (파일명·타입·조항제목) */
+    @GetMapping("/debug/chunks")
+    @ResponseBody
+    public java.util.List<java.util.Map<String, String>> debugChunks(
+            @RequestParam(required = false) String category
+    ) {
+        return aiService.getChunkTitlesForDebug(category);
+    }
+
     /**
      * O/X 피드백 엔드포인트
      *

@@ -73,8 +73,18 @@
         .user { background-color: #007bff; color: white; align-self: flex-end; margin-left: auto; }
         .ai { background-color: #e9ecef; color: #333; margin-right: auto; }
         .ai-avatar { width: 24px; height: 24px; border-radius: 50%; flex-shrink: 0; object-fit: cover; background-color: #e9ecef; align-self: flex-start; margin-top: 0; }
-        .message-content { flex: 1; margin: 0; padding: 0; line-height: 1.4; }
-        .message-content span { display: inline-block; vertical-align: top; }
+        .message-content { flex: 1; margin: 0; padding: 0; line-height: 1.4; white-space: normal; }
+        .message-content span { display: inline-block; vertical-align: top; white-space: pre-wrap; }
+        /* 마크다운 렌더링 후 span을 block으로 전환 */
+        .message-content span.rendered { display: block; white-space: normal; }
+        /* 마크다운 표 스타일 */
+        .message-content table { border-collapse: collapse; width: 100%; margin: 8px 0; font-size: 13px; }
+        .message-content th, .message-content td { border: 1px solid #ccc; padding: 6px 10px; text-align: left; vertical-align: top; line-height: 1.5; }
+        .message-content th { background-color: #eef2ff; font-weight: bold; }
+        .message-content tr:nth-child(even) td { background-color: #f9f9f9; }
+        /* 마크다운 ul/li 스타일 */
+        .message-content ul, .message-content ol { margin: 4px 0; padding-left: 20px; }
+        .message-content li { margin: 2px 0; }
         .loading { font-style: italic; color: gray; }
         .related-articles-btn {
             margin-top: 10px;
@@ -179,6 +189,7 @@
         .close:hover, .close:focus { color: #333; text-decoration: none; }
         #uploadForm button { width: 100%; padding: 10px; margin-top: 15px; background-color: #28a745; color: white; border: none; border-radius: 5px; cursor: pointer; }
     </style>
+    <script src="https://cdn.jsdelivr.net/npm/marked@9/marked.min.js"></script>
 </head>
 <body>
 <div class="container">
@@ -216,7 +227,7 @@
         </div>
         <div class="file-list-container">
             <h3>업로드된 파일</h3>
-            <div class="file-selection-info" id="fileSelectionInfo">선택된 파일: 0개 (최소 1개, 최대 5개)</div>
+            <div class="file-selection-info" id="fileSelectionInfo">💡 파일을 선택하면 더 빠르고 정확한 답변을 받을 수 있어요!</div>
             <ul id="fileList"></ul>
         </div>
         <div class="upload-button-area" id="uploadButtonArea" style="display: none;">
@@ -350,20 +361,41 @@
         return feedbackArea;
     }
 
+    // ── HTTP 에러 체크 헬퍼 ─────────────────────────────────────────
+    function checkResponse(res) {
+        if (res.status === 401) {
+            alert('로그인 세션이 만료되었습니다.\n다시 로그인해주세요.');
+            window.location.href = '/loginPage';
+            throw new Error('SESSION_EXPIRED');
+        }
+        if (!res.ok) {
+            throw new Error(`HTTP_${res.status}`);
+        }
+        return res;
+    }
+
     // ── 메인 질문 처리 함수 (재귀 재생성 지원) ──────────────────────
     async function processQuestion(question, category, selectedFilesArray, loadingDiv, loadingText, animationIntervalRef) {
 
         // 1단계: 관련 조항 추천
+        const stage1Body = { files: selectedFilesArray };
+        console.group('[DEBUG] Stage1 요청');
+        console.log('질문:', question);
+        console.log('카테고리:', category);
+        console.log('선택 파일:', selectedFilesArray.length > 0 ? selectedFilesArray : '없음 (전체 검색)');
+        console.groupEnd();
+
         const stage1Res = await fetch(
             `/lm/api/ask/stage1?question=${encodeURIComponent(question)}&category=${encodeURIComponent(category)}`,
             {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ files: selectedFilesArray })
+                body: JSON.stringify(stage1Body)
             }
         );
-        if (!stage1Res.ok) throw new Error(`HTTP error! status: ${stage1Res.status}`);
+        checkResponse(stage1Res);
         const recommendedTitles = await stage1Res.json();
+        console.log('[DEBUG] Stage1 결과 (LLM1이 선택한 조항):', recommendedTitles);
 
         if (!recommendedTitles || recommendedTitles.length === 0) {
             clearInterval(animationIntervalRef.id);
@@ -390,7 +422,7 @@
                 body: JSON.stringify(recommendedTitles)
             }
         );
-        if (!stage2Res.ok) throw new Error(`HTTP error! status: ${stage2Res.status}`);
+        checkResponse(stage2Res);
 
         // stage2 응답은 이제 JSON { answer, pendingKey }
         const stage2Result = await stage2Res.json();
@@ -403,7 +435,7 @@
         const { messageDiv, textSpan } = createAiMessageDiv();
         chatBox.appendChild(messageDiv);
 
-        typeMessage(textSpan, ': ' + answer, () => {
+        renderAnswerMessage(textSpan, answer, () => {
             // 타이핑 완료 후 O/X 피드백 버튼 표시
             if (pendingKey) {
                 const feedbackArea = renderFeedbackButtons(pendingKey);
@@ -447,13 +479,7 @@
         try {
             const category = categorySelect.value;
 
-            if (selectedFiles.size === 0) {
-                alert('최소 1개의 파일을 선택해주세요.');
-                sendBtn.disabled = false;
-                clearInterval(animationIntervalRef.id);
-                chatBox.removeChild(loadingDiv);
-                return;
-            }
+            // selectedFiles가 비어있으면 전체 파일 검색 (files=[] → 백엔드에서 필터 없이 전체 청크 검색)
             const selectedFilesArray = Array.from(selectedFiles);
 
             // 0단계: 캐시 확인
@@ -461,7 +487,7 @@
                 `/lm/api/ask/cache-check?question=${encodeURIComponent(question)}&category=${encodeURIComponent(category)}`,
                 { method: 'POST' }
             );
-            if (!cacheRes.ok) throw new Error(`HTTP error! status: ${cacheRes.status}`);
+            checkResponse(cacheRes);
             const cacheResult = await cacheRes.json();
 
             if (cacheResult.cached === true) {
@@ -470,7 +496,7 @@
                 chatBox.removeChild(loadingDiv);
                 const { messageDiv, textSpan } = createAiMessageDiv();
                 chatBox.appendChild(messageDiv);
-                typeMessage(textSpan, ': ' + cacheResult.answer, () => {
+                renderAnswerMessage(textSpan, cacheResult.answer, () => {
                     sendBtn.disabled = false;
                     userInput.focus();
                 });
@@ -482,11 +508,19 @@
             await processQuestion(question, category, selectedFilesArray, loadingDiv, loadingText, animationIntervalRef);
 
         } catch (error) {
+            if (error.message === 'SESSION_EXPIRED') return; // alert+redirect 이미 처리됨
             clearInterval(animationIntervalRef.id);
             if (loadingDiv.parentNode) chatBox.removeChild(loadingDiv);
             const { messageDiv, textSpan } = createAiMessageDiv();
             messageDiv.style.color = 'red';
-            textSpan.textContent = `오류: ${error.message}. 서버 콘솔을 확인하세요.`;
+            const msg = error.message || '';
+            if (msg.includes('HTTP_500') || msg.includes('HTTP_502') || msg.includes('HTTP_503')) {
+                textSpan.textContent = 'AI 서버에 일시적인 오류가 발생했습니다. 잠시 후 다시 시도해주세요.';
+            } else if (msg.includes('HTTP_')) {
+                textSpan.textContent = '요청 처리 중 오류가 발생했습니다. 페이지를 새로고침 후 다시 시도해주세요.';
+            } else {
+                textSpan.textContent = '네트워크 연결을 확인하고 다시 시도해주세요.';
+            }
             chatBox.appendChild(messageDiv);
             sendBtn.disabled = false;
         }
@@ -628,6 +662,24 @@
             if (!response.ok) throw new Error('파일 목록을 불러오지 못했습니다.');
             const files = await response.json();
             renderFiles(files);
+
+            // [DEBUG] 카테고리 내 전체 청크 목록 출력
+            fetch(`/lm/api/debug/chunks?category=${encodeURIComponent(currentCategory)}`)
+                .then(r => r.json())
+                .then(chunks => {
+                    console.group(`[DEBUG] 카테고리: ${currentCategory} | 총 ${chunks.length}개 청크`);
+                    const byFile = {};
+                    chunks.forEach(c => {
+                        if (!byFile[c.file]) byFile[c.file] = [];
+                        byFile[c.file].push(`[${c.type}] ${c.article} ${c.title}`);
+                    });
+                    Object.entries(byFile).forEach(([file, titles]) => {
+                        console.group(`📄 ${file} (${titles.length}개)`);
+                        titles.forEach(t => console.log(t));
+                        console.groupEnd();
+                    });
+                    console.groupEnd();
+                });
         } catch (error) {
             console.error(error);
         }
@@ -637,12 +689,8 @@
         fileList.innerHTML = '';
         const currentCategory = categorySelect.value;
 
-        // 분야가 변경되면 선택된 파일 초기화
+        // 분야가 변경되면 선택된 파일 초기화 (기본: 전체 검색)
         selectedFiles.clear();
-
-        // 최초 로드 시 상위 3개 자동 선택
-        const filesToSelect = files.slice(0, Math.min(3, files.length));
-        filesToSelect.forEach(file => selectedFiles.add(file));
 
         files.forEach((file, index) => {
             const li = document.createElement('li');
@@ -695,13 +743,15 @@
     // 파일 선택 정보 업데이트
     function updateFileSelectionInfo() {
         const count = selectedFiles.size;
-        fileSelectionInfo.textContent = `선택된 파일: ${count}개 (최소 1개, 최대 5개)`;
         if (count === 0) {
-            fileSelectionInfo.style.color = '#dc3545';
+            fileSelectionInfo.textContent = '💡 파일을 선택하면 더 빠르고 정확한 답변을 받을 수 있어요!';
+            fileSelectionInfo.style.color = '#0072ce';
         } else if (count === 5) {
+            fileSelectionInfo.textContent = `선택된 파일: ${count}개 (최대 5개)`;
             fileSelectionInfo.style.color = '#ffc107';
         } else {
-            fileSelectionInfo.style.color = '#666';
+            fileSelectionInfo.textContent = `선택된 파일: ${count}개 · 선택 파일만 검색합니다`;
+            fileSelectionInfo.style.color = '#28a745';
         }
     }
 
@@ -716,13 +766,18 @@
 
         try {
             const response = await fetch('/upload', { method: 'POST', body: formData });
+            if (response.status === 401) {
+                alert('로그인 세션이 만료되었습니다.\n다시 로그인해주세요.');
+                window.location.href = '/loginPage';
+                return;
+            }
             const result = await response.json();
 
             alert(result.message);
             if (result.status === "success") {
                 categorySelect.value = uploadCategory; // 업로드한 분야로 전환
                 closeUploadModal();
-                loadFiles(); // 성공 시 목록 새로고침 (RAG에 바로 반영)
+                loadFiles(); // 성공 시 목록 새로고침
             }
         } catch (err) {
             alert("업로드 중 오류 발생: " + err.message);
@@ -759,9 +814,14 @@
                 method: 'DELETE',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ filename, category: currentCategory }),
-                credentials: 'include'   // ✅ 쿠키(JWT) 보내기
+                credentials: 'include'
             });
 
+            if (response.status === 401) {
+                alert('로그인 세션이 만료되었습니다.\n다시 로그인해주세요.');
+                window.location.href = '/loginPage';
+                return;
+            }
             const result = await response.text();
             alert(result);
 
@@ -772,6 +832,22 @@
         } catch (err) {
             alert("삭제 중 오류 발생: " + err.message);
         }
+    }
+
+    // 답변 메시지 렌더링: 타이핑 애니메이션 후 마크다운 HTML로 변환
+    function renderAnswerMessage(element, rawAnswer, callback) {
+        // 타이핑 중에는 <br>을 줄바꿈으로 치환해 깔끔하게 표시
+        const textForTyping = ': ' + rawAnswer.replace(/<br\s*\/?>/gi, '\n');
+        typeMessage(element, textForTyping, () => {
+            // 타이핑 완료 후 마크다운 → HTML 렌더링
+            try {
+                element.classList.add('rendered');
+                element.innerHTML = ': ' + marked.parse(rawAnswer);
+            } catch (e) {
+                console.warn('[marked] 파싱 실패, 텍스트 유지:', e);
+            }
+            if (callback) callback();
+        });
     }
 
     // 타이핑 효과로 메시지 표시
@@ -801,7 +877,7 @@
 
     // 페이지 로드 시 초기 인사 메시지 표시
     function showInitialGreeting(selectedCategory) {
-        const greetingMessage = ': 안녕하세요, 저는 법률 및 규정 어시스턴트에요. 관련 분야를 선택하고 질문해 주세요.';
+        const greetingMessage = ': 안녕하세요, 저는 건설근로자공제회 업무 어시스턴트에요.\n관련 분야를 선택하고 질문해 주세요.';
         const messageDiv = document.createElement('div');
         messageDiv.classList.add('message', 'ai');
         const avatarImg = document.createElement('img');
@@ -889,7 +965,7 @@
 
     // 분야 선택 메시지 업데이트 함수
     function updateCategoryMessage(selectedCategory) {
-        const message = `: 현재 선택된 분야는 "${selectedCategory}"입니다. 이 분야에 대한 질문을 해주세요.`;
+        const message = `: 현재 선택된 분야는 "${selectedCategory}"입니다. 이 분야에 대한 질문을 해주세요.\n오른쪽 파일 관리 탭에서 관련 파일을 선택하면 더 빠르고 정확한 답변을 받을 수 있습니다. 선택하지 않으면 전체 파일을 참고하여 답변드려요.`;
 
         // 모든 분야 선택 메시지 찾기 (마지막 것을 찾기 위해)
         const allCategoryMessages = chatBox.querySelectorAll('.category-selection-message');

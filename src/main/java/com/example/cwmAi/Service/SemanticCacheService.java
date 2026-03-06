@@ -53,19 +53,21 @@ public class SemanticCacheService {
      * 캐시 항목: 임베딩 벡터 + 답변 + 메타정보
      */
     private static class CacheEntry {
-        final float[]  embedding;   // 384차원 벡터
-        final String   answer;      // 캐시된 LLM 답변
-        final String   category;    // 카테고리 (필터용)
-        final String   questionKey; // 원본 질문 (디버깅용)
-        final Instant  createdAt;   // 생성 시각
-        volatile int   hitCount;    // 캐시 히트 횟수
+        final float[]      embedding;   // 384차원 벡터
+        final String       answer;      // 캐시된 LLM 답변
+        final String       category;    // 카테고리 (필터용)
+        final String       questionKey; // 원본 질문 (디버깅용)
+        final Instant      createdAt;   // 생성 시각
+        final Set<String>  sourceFiles; // 답변 생성에 사용된 파일명 목록
+        volatile int       hitCount;    // 캐시 히트 횟수
 
-        CacheEntry(float[] embedding, String answer, String category, String questionKey) {
+        CacheEntry(float[] embedding, String answer, String category, String questionKey, Set<String> sourceFiles) {
             this.embedding   = embedding;
             this.answer      = answer;
             this.category    = category;
             this.questionKey = questionKey;
             this.createdAt   = Instant.now();
+            this.sourceFiles = sourceFiles != null ? sourceFiles : Collections.emptySet();
             this.hitCount    = 0;
         }
 
@@ -158,17 +160,44 @@ public class SemanticCacheService {
     }
 
     /**
+     * 답변 텍스트의 "[참조 파일: ...]" 섹션에서 파일명을 파싱한다.
+     * generateFinalAnswer()가 답변 끝에 붙여놓은 정보를 역으로 복원
+     */
+    private Set<String> parseSourceFilesFromAnswer(String answer) {
+        if (answer == null) return Collections.emptySet();
+        int idx = answer.lastIndexOf("[참조 파일:");
+        if (idx < 0) return Collections.emptySet();
+        int end = answer.indexOf("]", idx);
+        if (end < 0) return Collections.emptySet();
+        String files = answer.substring(idx + "[참조 파일:".length(), end).trim();
+        Set<String> result = new LinkedHashSet<>();
+        for (String f : files.split(",")) {
+            String t = f.trim();
+            if (!t.isEmpty()) result.add(t);
+        }
+        return result;
+    }
+
+    // 기존 호출부 하위 호환 (sourceFiles를 답변 텍스트에서 파싱해서 위임)
+    public void cacheAnswer(String question, String answer, String category) {
+        cacheAnswer(question, answer, category, parseSourceFilesFromAnswer(answer));
+    }
+
+    public String cachePending(String question, String answer, String category) {
+        return cachePending(question, answer, category, parseSourceFilesFromAnswer(answer));
+    }
+
+    /**
      * LLM 답변을 캐시에 저장한다.
      *
      * @param question 사용자 질문
      * @param answer   LLM이 생성한 답변
      * @param category 카테고리
      */
-    public void cacheAnswer(String question, String answer, String category) {
+    public void cacheAnswer(String question, String answer, String category, Set<String> sourceFiles) {
         if (question == null || question.isBlank()) return;
         if (answer   == null || answer.isBlank())   return;
 
-        // 캐시 크기 초과 시 오래된 항목 제거
         if (cache.size() >= MAX_CACHE_SIZE) {
             evictOldest();
         }
@@ -177,10 +206,10 @@ public class SemanticCacheService {
         if (embedding == null) return;
 
         String key = UUID.randomUUID().toString();
-        cache.put(key, new CacheEntry(embedding, answer, category, question));
+        cache.put(key, new CacheEntry(embedding, answer, category, question, sourceFiles));
 
-        System.out.printf("[SemanticCache] STORE 캐시항목수=%d  질문='%s'%n",
-                cache.size(), truncate(question, 40));
+        System.out.printf("[SemanticCache] STORE 캐시항목수=%d  질문='%s'  참조파일=%s%n",
+                cache.size(), truncate(question, 40), sourceFiles);
     }
 
     /**
@@ -192,7 +221,7 @@ public class SemanticCacheService {
      * @param category 카테고리
      * @return pendingKey (프론트에서 O/X 요청 시 사용)
      */
-    public String cachePending(String question, String answer, String category) {
+    public String cachePending(String question, String answer, String category, Set<String> sourceFiles) {
         if (question == null || question.isBlank()) return null;
         if (answer   == null || answer.isBlank())   return null;
 
@@ -200,7 +229,7 @@ public class SemanticCacheService {
         if (embedding == null) return null;
 
         String pendingKey = UUID.randomUUID().toString();
-        pendingCache.put(pendingKey, new CacheEntry(embedding, answer, category, question));
+        pendingCache.put(pendingKey, new CacheEntry(embedding, answer, category, question, sourceFiles));
 
         System.out.printf("[SemanticCache] PENDING key=%s  질문='%s'%n",
                 pendingKey.substring(0, 8), truncate(question, 40));
@@ -257,6 +286,29 @@ public class SemanticCacheService {
         int removed = before - cache.size();
         System.out.printf("[SemanticCache] INVALIDATE category='%s'  제거항목=%d  남은항목=%d%n",
                 category, removed, cache.size());
+    }
+
+    /**
+     * 특정 파일을 참조한 캐시 항목만 무효화한다.
+     * 파일 삭제 시 카테고리 전체 대신 해당 파일 관련 항목만 제거 → 다른 파일 캐시 보존
+     *
+     * @param fileName 삭제된 파일명
+     * @param category 카테고리
+     */
+    public void invalidateCacheByFile(String fileName, String category) {
+        if (fileName == null || fileName.isBlank()) return;
+        String normalized = normalizeCategory(category);
+        int before = cache.size();
+
+        cache.entrySet().removeIf(e -> {
+            CacheEntry ce = e.getValue();
+            return normalizeCategory(ce.category).equals(normalized)
+                    && ce.sourceFiles.contains(fileName);
+        });
+
+        int removed = before - cache.size();
+        System.out.printf("[SemanticCache] INVALIDATE_BY_FILE file='%s' category='%s'  제거=%d  남은=%d%n",
+                fileName, category, removed, cache.size());
     }
 
     /**
