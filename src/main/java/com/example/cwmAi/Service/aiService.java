@@ -629,7 +629,13 @@ public class aiService {
                         if (content != null && !content.trim().isEmpty()) {
                             String cleaned = content.replace("#", "").replace("*", "");
                             if (!sourceFiles.isEmpty()) {
-                                cleaned += "\n\n[참조 파일: " + String.join(", ", sourceFiles) + "]";
+                                // 화면 표시용: ".pdf" 확장자는 제거
+                                java.util.List<String> displayNames = sourceFiles.stream()
+                                        .map(name -> name != null && name.toLowerCase().endsWith(".pdf")
+                                                ? name.substring(0, name.length() - 4)
+                                                : name)
+                                        .toList();
+                                cleaned += "\n\n[참조 파일: " + String.join(", ", displayNames) + "]";
                             }
                             return cleaned;
                         }
@@ -963,7 +969,13 @@ public class aiService {
                             String cleanedContent = content.replace("#", "").replace("*", "");
 
                             if (!sourceFiles.isEmpty()) {
-                                cleanedContent += "\n\n[참조 파일: " + String.join(", ", sourceFiles) + "]";
+                                // 화면 표시용: ".pdf" 확장자는 제거
+                                java.util.List<String> displayNames = sourceFiles.stream()
+                                        .map(name -> name != null && name.toLowerCase().endsWith(".pdf")
+                                                ? name.substring(0, name.length() - 4)
+                                                : name)
+                                        .toList();
+                                cleanedContent += "\n\n[참조 파일: " + String.join(", ", displayNames) + "]";
                             }
 
                             System.out.println("--- [2단계] 최종 답변 (원본) ---");
