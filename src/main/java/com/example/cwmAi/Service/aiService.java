@@ -9,6 +9,7 @@ import io.netty.handler.timeout.WriteTimeoutHandler;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.text.PDFTextStripper;
 import org.springframework.http.client.reactive.ReactorClientHttpConnector;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.client.WebClient;
@@ -42,6 +43,12 @@ public class aiService {
      ========================= */
     private static final String OLLAMA_BASE_URL = "http://localhost:11434/api";
     private static final String MODEL_NAME = "qwen3:4b-instruct-2507-q4_K_M";
+
+    // v2 모드에서 LLM2에 직접 전달할 청크 수 (LLM1 없이 바로 답변 — 컨텍스트 과부하 방지)
+    private static final int V2_DIRECT_TOP_K = 10;
+
+    @Value("${rag.pipeline.version:1}")
+    private int ragPipelineVersion;
 //    private static final String MODEL_NAME = "exaone3.5:2.4b";
     // JAR 파일 실행 위치 기준 상대 경로 (uploads 폴더)
     private static final String UPLOAD_DIR;
@@ -387,6 +394,7 @@ public class aiService {
     // 0226 김소연(수정): askModel v2 - 벡터+키워드 top-50 필터링 후 LLM 1단계
     // 이유: 전체 조항 목록 → LLM 방식 대비 토큰 절감, 속도 개선
     public Mono<String> askModel(String userPrompt, String category) {
+        if (ragPipelineVersion == 2) return askModelV2(userPrompt, category);
         // ① 캐시 확인
         Optional<String> cached = semanticCacheService.findCachedAnswer(userPrompt, category);
         if (cached.isPresent()) {
@@ -429,6 +437,8 @@ public class aiService {
 
     // 0226 김소연(수정): askModelWithStages v2 - 벡터+키워드 필터링 후 LLM 전달
     public Flux<aiResponseDTO> askModelWithStages(String userPrompt, String category) {
+        if (ragPipelineVersion == 2) return askModelWithStagesV2(userPrompt, category);
+
         Mono<aiResponseDTO> stage1Start = Mono.just(
                 new aiResponseDTO("stage1", "관련 조항을 찾는 중입니다...", null, null));
 
@@ -461,6 +471,174 @@ public class aiService {
 
         return Flux.concat(stage1Start, stage2AndFinal)
                 .filter(dto -> dto != null && dto.getStage() != null);
+    }
+
+    // ── v2: LLM1 없이 벡터+키워드 top-K → 바로 LLM2 ──────────────────────────
+    private Mono<String> askModelV2(String userPrompt, String category) {
+        Optional<String> cached = semanticCacheService.findCachedAnswer(userPrompt, category);
+        if (cached.isPresent()) {
+            System.out.println("[v2][캐시HIT] 즉시 반환: " + userPrompt.substring(0, Math.min(40, userPrompt.length())));
+            return Mono.just(cached.get());
+        }
+
+        List<chunkDTO> filteredChunks = filterChunksByVectorAndKeyword(userPrompt, category);
+        if (filteredChunks.isEmpty()) {
+            return Mono.just("해당 분야의 관련 내용을 찾을 수 없습니다. 다른 키워드로 다시 질문해주세요.");
+        }
+
+        // MANUAL 우선 정렬 후 top-K 선택
+        List<chunkDTO> topChunks = filteredChunks.stream()
+                .sorted(Comparator.comparing(c -> "MANUAL".equals(c.getChunkType()) ? 0 : 1))
+                .limit(V2_DIRECT_TOP_K)
+                .collect(Collectors.toList());
+
+        System.out.printf("[v2] LLM1 생략 — 벡터+키워드 top-%d 청크 직접 LLM2 전달%n", topChunks.size());
+
+        return generateFinalAnswerFromChunks(userPrompt, topChunks, category)
+                .doOnSuccess(answer -> {
+                    if (answer != null && !answer.isBlank()) {
+                        String pendingKey = semanticCacheService.cachePending(userPrompt, answer, category);
+                        if (pendingKey != null) semanticCacheService.approvePending(pendingKey);
+                    }
+                });
+    }
+
+    private Flux<aiResponseDTO> askModelWithStagesV2(String userPrompt, String category) {
+        Mono<aiResponseDTO> stage1Start = Mono.just(
+                new aiResponseDTO("stage1", "관련 조항을 찾는 중입니다...", null, null));
+
+        List<chunkDTO> filteredChunks = filterChunksByVectorAndKeyword(userPrompt, category);
+        if (filteredChunks.isEmpty()) {
+            return Flux.just(
+                    new aiResponseDTO("stage1", "관련 조항을 찾는 중입니다...", null, null),
+                    new aiResponseDTO("completed", null, null,
+                            "해당 분야의 관련 내용을 찾을 수 없습니다. 다른 키워드로 다시 질문해주세요.")
+            ).filter(dto -> dto != null && dto.getStage() != null);
+        }
+
+        // MANUAL 우선 정렬 후 top-K 선택
+        List<chunkDTO> topChunks = filteredChunks.stream()
+                .sorted(Comparator.comparing(c -> "MANUAL".equals(c.getChunkType()) ? 0 : 1))
+                .limit(V2_DIRECT_TOP_K)
+                .collect(Collectors.toList());
+
+        List<String> chunkTitles = topChunks.stream()
+                .map(chunkDTO::getArticleTitle)
+                .filter(t -> t != null && !t.isBlank())
+                .distinct()
+                .collect(Collectors.toList());
+
+        System.out.printf("[v2] LLM1 생략 — 벡터+키워드 top-%d 청크 직접 LLM2 전달%n", topChunks.size());
+
+        Mono<aiResponseDTO> stage2Start = Mono.just(new aiResponseDTO("stage2",
+                "관련조항을 바탕으로 답변을 생성중입니다! 조금만 기다려주세요!",
+                chunkTitles, null));
+
+        Mono<aiResponseDTO> finalAnswer = generateFinalAnswerFromChunks(userPrompt, topChunks, category)
+                .map(answer -> new aiResponseDTO("completed", null, chunkTitles, answer));
+
+        return Flux.concat(stage1Start, stage2Start, finalAnswer)
+                .filter(dto -> dto != null && dto.getStage() != null);
+    }
+
+    // v2 전용: 청크 직접 받아 LLM2 호출 (title 조회 단계 없음)
+    private Mono<String> generateFinalAnswerFromChunks(String userPrompt, List<chunkDTO> relevantChunks, String category) {
+        if (relevantChunks.isEmpty()) {
+            return Mono.just("관련 조항을 찾을 수 없습니다.");
+        }
+
+        System.out.println("[v2][2단계] 청크 수: " + relevantChunks.size());
+
+        Set<String> sourceFiles = relevantChunks.stream()
+                .map(chunkDTO::getFileName)
+                .filter(Objects::nonNull)
+                .collect(Collectors.toCollection(LinkedHashSet::new));
+
+        List<chunkDTO> lawChunks = new ArrayList<>();
+        List<chunkDTO> manualChunks = new ArrayList<>();
+        for (chunkDTO c : relevantChunks) {
+            if ("MANUAL".equals(c.getChunkType())) manualChunks.add(c);
+            else lawChunks.add(c);
+        }
+        System.out.printf("[v2][2단계] LAW:%d MANUAL:%d%n", lawChunks.size(), manualChunks.size());
+
+        List<messageDTO> messages = new ArrayList<>();
+        messages.add(new messageDTO("system",
+                """
+                너는 공공기관 실무 보조 AI다.
+                다음 규칙을 반드시 지켜라:
+                1. 모든 답변은 반드시 한글로만 작성한다. 영어, 로마자, 기호는 사용하지 않는다.
+                2. 업무매뉴얼 내용이 있으면 실무 절차를 먼저 설명하고, 법령 근거는 보조로 제시한다.
+                3. 법령 근거는 답변 맨 마지막에 한 번만 "[근거: 법령명 제○조]" 형식으로 작성한다.
+                4. 금액, 수치, 법령 조문 번호는 원문 그대로 유지한다.
+                5. 답변은 최대 10개 항목, 각 항목 2~3문장 이내로 간결하게 작성한다.
+                6. 불필요한 설명, 반복 문장, 유사 표현을 금지한다.
+                7. 제공된 자료에 없는 내용은 절대 추가하지 않는다. 추론·유추·보완 답변을 금지한다.
+"""));
+
+        StringBuilder contextBuilder = new StringBuilder();
+        contextBuilder.append("아래 자료를 참고하여 사용자 질문에 관련된 내용만 답변하세요. 불필요한 설명이나 자료에 없는 내용은 추가하지 마세요:\n\n");
+
+        if (!manualChunks.isEmpty()) {
+            contextBuilder.append("=== 업무매뉴얼 ===\n");
+            for (chunkDTO chunk : manualChunks) {
+                contextBuilder.append("【").append(chunk.getLawName())
+                        .append(" - ").append(chunk.getArticleTitle()).append("】\n")
+                        .append(chunk.getText()).append("\n\n");
+            }
+        }
+        if (!lawChunks.isEmpty()) {
+            contextBuilder.append("=== 관련 법령·조항 ===\n");
+            for (chunkDTO chunk : lawChunks) {
+                contextBuilder.append("【").append(chunk.getLawName())
+                        .append(" ").append(chunk.getArticleNumber())
+                        .append(" ").append(chunk.getArticleTitle()).append("】\n")
+                        .append(chunk.getText()).append("\n\n");
+            }
+        }
+
+        try {
+            String captionMention = extractCaptionFromChunks(userPrompt, relevantChunks);
+            List<com.example.cwmAi.dto.doc_DTO.TableDoc> tablesToAttach = new ArrayList<>();
+            if (captionMention != null) {
+                tableStore.findByCaption(captionMention, category).ifPresent(tablesToAttach::add);
+            }
+            if (tablesToAttach.isEmpty()) {
+                tablesToAttach.addAll(tableStore.findTop2ByVector(userPrompt, category));
+            }
+            for (com.example.cwmAi.dto.doc_DTO.TableDoc t : tablesToAttach) {
+                contextBuilder.append("\n\n다음 표를 참고하여 답변을 보강하세요:\n")
+                        .append(tableStore.renderTableForPrompt(t, 25, 180)).append("\n");
+            }
+        } catch (Exception ex) {
+            System.err.println("[v2][표첨부] 실패: " + ex.getMessage());
+        }
+
+        contextBuilder.append("\n질문: ").append(userPrompt);
+        messages.add(new messageDTO("user", contextBuilder.toString()));
+
+        return webClient.post().uri("/chat")
+                .header("Content-Type", "application/json")
+                .bodyValue(new ChatRequest(MODEL_NAME, messages))
+                .retrieve().bodyToMono(String.class)
+                .map(rawResponse -> {
+                    try {
+                        responseDTO response = objectMapper.readValue(rawResponse, responseDTO.class);
+                        if (response == null || response.getMessage() == null) return "AI 응답을 받지 못했습니다.";
+                        String content = response.getContent();
+                        if (content != null && !content.trim().isEmpty()) {
+                            String cleaned = content.replace("#", "").replace("*", "");
+                            if (!sourceFiles.isEmpty()) {
+                                cleaned += "\n\n[참조 파일: " + String.join(", ", sourceFiles) + "]";
+                            }
+                            return cleaned;
+                        }
+                        return "AI 응답을 받지 못했습니다.";
+                    } catch (Exception e) {
+                        return "AI 응답 파싱 오류: " + e.getMessage();
+                    }
+                })
+                .onErrorResume(e -> Mono.just("AI 호출 중 오류 발생: " + e.getMessage()));
     }
 
     /**
@@ -637,12 +815,13 @@ public class aiService {
                 4. 금액, 수치, 법령 조문 번호는 원문 그대로 유지한다.
                 5. 답변은 최대 10개 항목, 각 항목 2~3문장 이내로 간결하게 작성한다.
                 6. 불필요한 설명, 반복 문장, 유사 표현을 금지한다.
-                """
+                7. 제공된 자료에 없는 내용은 절대 추가하지 않는다. 추론·유추·보완 답변을 금지한다.
+"""
         ));
 
         // 유저 메시지: 업무매뉴얼 섹션 → 법령 섹션 순서로 컨텍스트 구성
         StringBuilder contextBuilder = new StringBuilder();
-        contextBuilder.append("다음 자료를 참고하여 질문에 한글로만 답변해주세요:\n\n");
+        contextBuilder.append("아래 자료를 참고하여 사용자 질문에 관련된 내용만 답변하세요. 불필요한 설명이나 자료에 없는 내용은 추가하지 마세요:\n\n");
 
         if (!manualChunks.isEmpty()) {
             contextBuilder.append("=== 업무매뉴얼 ===\n");
@@ -783,7 +962,6 @@ public class aiService {
                             // 가독성을 위해 #과 * 특수문자 제거
                             String cleanedContent = content.replace("#", "").replace("*", "");
 
-                            // 참조 파일 표시 추가
                             if (!sourceFiles.isEmpty()) {
                                 cleanedContent += "\n\n[참조 파일: " + String.join(", ", sourceFiles) + "]";
                             }
@@ -1101,13 +1279,13 @@ public class aiService {
      * - MANUAL: 유사도 임계값 0.70 (구어체 표현 커버)
      * LLM 호출 없음 → ms 단위 응답
      */
-    // LAW: top-20, MANUAL: top-5 (컨텍스트 최소화 → 속도 개선)
+    // bge-m3 기준 top-K / threshold (AllMiniLmL6V2 대비 점수 범위 다름 → 임계값 낮춤)
     private static final int LAW_TOP_K    = 30;
     private static final int MANUAL_TOP_K = 10;
 
     private List<chunkDTO> filterChunksByType(String question, String category, String chunkType) {
         int topK = "MANUAL".equals(chunkType) ? MANUAL_TOP_K : LAW_TOP_K;
-        float threshold = "MANUAL".equals(chunkType) ? 0.65f : 0.75f;
+        float threshold = "MANUAL".equals(chunkType) ? 0.55f : 0.65f;
 
         // 1) 벡터 검색
         List<chunkDTO> vectorResults = vectorStore.searchByVector(question, topK, category, chunkType, threshold);
