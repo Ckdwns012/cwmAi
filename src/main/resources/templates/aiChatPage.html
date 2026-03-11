@@ -8,7 +8,8 @@
 </script>
 <head>
     <meta charset="UTF-8">
-    <title>AI 채팅 및 파일 관리 통합 페이지</title>
+    <title>CWMAI</title>
+    <link rel="icon" type="image/png" th:href="@{/images/Cw_ci.png}">
     <style>
         /* 기본 레이아웃 및 리셋 */
         body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 0; padding: 0; display: flex; height: 100vh; background-color: #f4f4f4; }
@@ -46,7 +47,7 @@
             transform: translateY(-50%);
             width: 40px;
             height: 80px;
-            background-color: #007bff;
+            background-color: #003b83;
             color: white;
             border: none;
             border-radius: 8px 0 0 8px;
@@ -60,7 +61,7 @@
             transition: all 0.3s ease;
         }
         .toggle-file-pane-btn:hover {
-            background-color: #0056b3;
+            background-color: #002a5e;
             width: 45px;
         }
         .toggle-file-pane-btn.hidden {
@@ -68,10 +69,38 @@
         }
 
         /* AI 채팅 영역 */
-        #chatBox { flex-grow: 1; border: 1px solid #ccc; border-radius: 8px; padding: 15px; overflow-y: auto; margin-bottom: 10px; background-color: #fafafa; }
+        #chatBox {
+            flex-grow: 1;
+            border: 1px solid rgba(255,255,255,0.9);
+            border-radius: 18px;
+            padding: 15px;
+            overflow-y: auto;
+            margin-bottom: 10px;
+            background: linear-gradient(160deg, rgba(205,212,222,0.75) 0%, rgba(215,220,230,0.62) 100%);
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            box-shadow:
+                0 8px 32px rgba(0,59,131,0.14),
+                inset 0 1px 0 rgba(255,255,255,0.80),
+                inset 0 -1px 0 rgba(0,59,131,0.06);
+        }
         .message { margin-bottom: 10px; padding: 8px 12px; border-radius: 15px; max-width: 80%; display: flex; align-items: flex-start; gap: 6px; }
-        .user { background-color: #007bff; color: white; align-self: flex-end; margin-left: auto; }
-        .ai { background-color: #e9ecef; color: #333; margin-right: auto; }
+        .user {
+            background: linear-gradient(135deg, #003b83, #2b485f);
+            color: white;
+            align-self: flex-end;
+            margin-left: auto;
+            box-shadow: 0 4px 14px rgba(0,59,131,0.25);
+        }
+        .ai {
+            background: rgba(255,255,255,0.75);
+            backdrop-filter: blur(8px);
+            -webkit-backdrop-filter: blur(8px);
+            color: #1a2a4a;
+            margin-right: auto;
+            border: 1px solid rgba(255,255,255,0.9);
+            box-shadow: 0 2px 10px rgba(0,59,131,0.07);
+        }
         .ai-avatar { width: 24px; height: 24px; border-radius: 50%; flex-shrink: 0; object-fit: cover; background-color: #e9ecef; align-self: flex-start; margin-top: 0; }
         .message-content { flex: 1; margin: 0; padding: 0; line-height: 1.4; white-space: normal; }
         .message-content span { display: inline-block; vertical-align: top; white-space: pre-wrap; }
@@ -101,7 +130,7 @@
         .related-articles-btn {
             margin-top: 10px;
             padding: 8px 16px;
-            background-color: #007bff;
+            background-color: #003b83;
             color: white;
             border: none;
             border-radius: 8px;
@@ -120,7 +149,7 @@
             padding: 8px;
             margin: 5px 0;
             background-color: white;
-            border-left: 3px solid #007bff;
+            border-left: 3px solid #003b83;
             border-radius: 4px;
         }
 
@@ -165,20 +194,52 @@
         }
 
         .chat-input-area { display: flex; gap: 10px; }
-        .chat-input-area input { flex-grow: 1; padding: 10px; border: 1px solid #ccc; border-radius: 8px; }
-        .chat-input-area button { padding: 10px 20px; background-color: #28a745; color: white; border: none; border-radius: 8px; cursor: pointer; transition: background-color 0.3s ease; }
-        .chat-input-area button:disabled { background-color: #6c757d; color: white; cursor: not-allowed; opacity: 0.6; }
+        .chat-input-area input {
+            flex-grow: 1;
+            padding: 12px 18px;
+            border: 1px solid rgba(0,59,131,0.2);
+            border-radius: 14px;
+            background: linear-gradient(160deg, rgba(255,255,255,0.75) 0%, rgba(238,244,255,0.65) 100%);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            color: #1a2a4a;
+            font-size: 14px;
+            outline: none;
+            box-shadow: 0 4px 22px rgba(0,59,131,0.12), inset 0 1px 0 rgba(255,255,255,0.98), inset 0 -1px 0 rgba(180,200,240,0.4);
+            transition: all 0.25s ease;
+        }
+        .chat-input-area input::placeholder { color: rgba(43,72,95,0.4); }
+        .chat-input-area input:focus {
+            border-color: rgba(0,59,131,0.35);
+            box-shadow: 0 4px 28px rgba(0,59,131,0.20), inset 0 1px 0 rgba(255,255,255,0.98), inset 0 -1px 0 rgba(150,180,230,0.5);
+            background: linear-gradient(160deg, rgba(235,242,255,0.85) 0%, rgba(220,233,255,0.75) 100%);
+        }
+        .chat-input-area button {
+            padding: 12px 22px;
+            background: linear-gradient(135deg, #f8b616, #e6a800);
+            color: #003b83;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: 700;
+            font-size: 14px;
+            transition: all 0.2s ease;
+            box-shadow: 0 4px 14px rgba(248,182,22,0.35);
+        }
+        .chat-input-area button:hover:not(:disabled) {
+            transform: translateY(-1px);
+            box-shadow: 0 6px 20px rgba(248,182,22,0.5);
+        }
+        .chat-input-area button:disabled { background: #d0d8e8; color: #8a9ab8; cursor: not-allowed; box-shadow: none; }
 
         .ai-response {
-            /* 이 설정이 핵심입니다. 공백과 줄바꿈을 그대로 화면에 표시해 줍니다. */
             white-space: pre-wrap;
-
-            /* 채팅창의 크기와 스크롤 설정을 위한 기본 스타일 (선택사항) */
             height: 400px;
             overflow-y: auto;
             border: 1px solid #ccc;
             padding: 10px;
-            margin-bottom: 10px;}
+            margin-bottom: 10px;
+        }
 
         /* 파일 관리 영역 */
         .file-list-container { flex-grow: 1; overflow-y: auto; margin-bottom: 15px; }
@@ -187,20 +248,20 @@
         .file-item { display: flex; justify-content: space-between; align-items: center; padding: 10px 0; border-bottom: 1px solid #eee; }
         .file-item-content { display: flex; align-items: center; gap: 10px; flex: 1; }
         .file-item input[type="checkbox"] { width: 18px; height: 18px; cursor: pointer; margin: 0; }
-        .file-item a { text-decoration: none; color: #0056b3; flex: 1; }
+        .file-item a { text-decoration: none; color: #003b83; flex: 1; }
         .file-item a:hover { text-decoration: underline; }
         .delete-btn { background-color: #dc3545; color: white; border: none; padding: 5px 10px; border-radius: 4px; cursor: pointer; }
         .file-selection-info { margin-bottom: 10px; padding: 8px; background-color: #f8f9fa; border-radius: 4px; font-size: 13px; color: #666; }
 
         .upload-button-area { text-align: right; }
-        #addFileBtn { padding: 10px 20px; background-color: #007bff; color: white; border: none; border-radius: 8px; cursor: pointer; }
+        #addFileBtn { padding: 10px 20px; background-color: #003b83; color: white; border: none; border-radius: 8px; cursor: pointer; }
 
         /* 모달 (팝업) 스타일 */
         .modal { display: none; position: fixed; z-index: 1; left: 0; top: 0; width: 100%; height: 100%; background-color: rgba(0,0,0,0.5); }
         .modal-content { background-color: #fff; margin: 15% auto; padding: 30px; border: 1px solid #888; width: 400px; border-radius: 10px; box-shadow: 0 5px 15px rgba(0,0,0,0.3); }
         .close { color: #aaa; float: right; font-size: 28px; font-weight: bold; cursor: pointer; }
         .close:hover, .close:focus { color: #333; text-decoration: none; }
-        #uploadForm button { width: 100%; padding: 10px; margin-top: 15px; background-color: #28a745; color: white; border: none; border-radius: 5px; cursor: pointer; }
+        #uploadForm button { width: 100%; padding: 10px; margin-top: 15px; background-color: #f8b616; color: #003b83; border: none; border-radius: 5px; cursor: pointer; }
     </style>
     <script src="https://cdn.jsdelivr.net/npm/marked@9/marked.min.js"></script>
 </head>
@@ -222,7 +283,7 @@
                 <label for="categorySelect" style="margin: 0; font-weight: bold; color: #555;">분야 선택: </label>
                 <select id="categorySelect" style="padding: 8px; border: 1px solid #ccc; border-radius: 8px; min-width: 200px; font-size: 14px; flex: 1;"></select>
             </div>
-            <button id="addCategoryBtn" style="padding: 8px 16px; background-color: #6c757d; color: #fff; border: none; border-radius: 8px; cursor: pointer; font-size: 14px; white-space: nowrap; display: none;">분야 추가</button>
+            <button id="addCategoryBtn" style="padding: 8px 16px; background-color: #2b485f; color: #fff; border: none; border-radius: 8px; cursor: pointer; font-size: 14px; white-space: nowrap; display: none;">분야 추가</button>
         </div>
         <!-- 여기에 ai-response 클래스 추가 -->
         <div id="chatBox" class="ai-response"></div>
@@ -274,7 +335,7 @@
             <label for="newCategoryInput">새 분야 명: </label>
             <input type="text" id="newCategoryInput" placeholder="분야명을 입력하세요" required
                    style="width: 100%; padding: 8px; margin-top: 10px; border: 1px solid #ccc; border-radius: 8px; box-sizing: border-box;">
-            <button type="submit" style="width: 100%; padding: 10px; margin-top: 15px; background-color: #28a745; color: white; border: none; border-radius: 5px; cursor: pointer;">추가하기</button>
+            <button type="submit" style="width: 100%; padding: 10px; margin-top: 15px; background-color: #f8b616; color: #003b83; border: none; border-radius: 5px; font-weight: 700; cursor: pointer;">추가하기</button>
         </form>
     </div>
 </div>

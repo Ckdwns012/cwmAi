@@ -3,7 +3,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>회원가입</title>
+    <title>CWMAI</title>
+    <link rel="icon" type="image/png" th:href="@{/images/Cw_ci.png}">
     <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
     <style>
         * {
@@ -87,8 +88,8 @@
         input[type="password"]:focus,
         input[type="email"]:focus {
             outline: none;
-            border-color: #007bff;
-            box-shadow: 0 0 0 3px rgba(0, 123, 255, 0.1);
+            border-color: #003b83;
+            box-shadow: 0 0 0 3px rgba(0, 59, 131, 0.1);
         }
         
         .id-check-group {
@@ -103,7 +104,7 @@
         
         .id-check-group button {
             padding: 12px 20px;
-            background-color: #6c757d;
+            background-color: #2b485f;
             color: white;
             border: none;
             border-radius: 8px;
@@ -115,9 +116,9 @@
         }
         
         .id-check-group button:hover {
-            background-color: #5a6268;
+            background-color: #1e3344;
             transform: translateY(-2px);
-            box-shadow: 0 4px 8px rgba(108, 117, 125, 0.3);
+            box-shadow: 0 4px 8px rgba(43, 72, 95, 0.3);
         }
         
         .id-check-msg {
@@ -127,7 +128,7 @@
         }
         
         .id-check-msg.success {
-            color: #28a745;
+            color: #003b83;
         }
         
         .id-check-msg.error {
@@ -150,18 +151,18 @@
             font-weight: 600;
             cursor: pointer;
             transition: all 0.3s ease;
-            background-color: #007bff;
+            background-color: #003b83;
             color: white;
         }
         
         button[type="submit"]:hover:not(:disabled) {
-            background-color: #0056b3;
+            background-color: #002a5e;
             transform: translateY(-2px);
-            box-shadow: 0 4px 8px rgba(0, 123, 255, 0.3);
+            box-shadow: 0 4px 8px rgba(0, 59, 131, 0.3);
         }
         
         button[type="submit"]:disabled {
-            background-color: #6c757d;
+            background-color: #2b485f;
             cursor: not-allowed;
             opacity: 0.6;
         }
@@ -174,7 +175,7 @@
         }
         
         .login-link a {
-            color: #007bff;
+            color: #003b83;
             text-decoration: none;
             font-weight: 600;
         }
