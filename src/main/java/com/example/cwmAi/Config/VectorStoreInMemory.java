@@ -4,13 +4,11 @@ import org.springframework.stereotype.Component;
 
 import com.example.cwmAi.dto.ai_DTO.chunkDTO;
 
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
+import java.util.*;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
+import java.util.stream.Collectors;
+import dev.langchain4j.data.segment.TextSegment;
+import dev.langchain4j.model.embedding.EmbeddingModel;
 
 @Component
 public class VectorStoreInMemory {
@@ -151,7 +149,7 @@ public class VectorStoreInMemory {
     public Map<String, String> getArticleTitlesByCategory(String category) {
         return getArticleTitlesByCategoryAndFiles(category, null);
     }
-    
+
     /**
      * 카테고리와 파일명 리스트로 필터링하여 조항 이름 목록을 조회한다.
      * @param category 카테고리
@@ -274,11 +272,9 @@ public class VectorStoreInMemory {
                 if (chunk.getLawName() == null || chunk.getLawName().trim().isEmpty() || chunk.getLawName().equals("알 수 없음")) {
                     errors.add("법령명이 없거나 유효하지 않음: " + chunk.getLawName());
                 }
-                // 조항 번호 검증
+                // 조항 번호 검증 (형식 비교 제거 — 법령/목차/템플릿 모두 허용)
                 if (chunk.getArticleNumber() == null || chunk.getArticleNumber().trim().isEmpty()) {
                     errors.add("조항 번호가 없음");
-                } else if (!chunk.getArticleNumber().matches("제\\s*\\d+(?:조(?:의\\s*\\d+)?)?")) {
-                    errors.add("조항 번호 형식이 올바르지 않음: " + chunk.getArticleNumber());
                 }
                 // 조항 이름 검증
                 if (chunk.getArticleTitle() == null || chunk.getArticleTitle().trim().isEmpty()) {
@@ -319,4 +315,89 @@ public class VectorStoreInMemory {
             rwLock.readLock().unlock();
         }
     }
+
+    // ── 청크 벡터 검색 ─────────────────────────────────────────────────────────
+    // EmbeddingModelConfig에서 주입된 싱글턴 사용 (기존 직접 생성 제거)
+    private final EmbeddingModel embeddingModel;
+
+    public VectorStoreInMemory(EmbeddingModel embeddingModel) {
+        this.embeddingModel = embeddingModel;
+    }
+
+    // 임베딩용 텍스트 생성 (조항번호 + 제목 + 본문 앞 500자)
+    private String buildEmbeddingText(chunkDTO c) {
+        StringBuilder sb = new StringBuilder();
+        if (c.getArticleNumber() != null && !c.getArticleNumber().isBlank())
+            sb.append(c.getArticleNumber()).append(" ");
+        if (c.getArticleTitle() != null && !c.getArticleTitle().isBlank())
+            sb.append(c.getArticleTitle()).append(" ");
+        if (c.getText() != null && !c.getText().isBlank()) {
+            String body = c.getText().trim();
+            sb.append(body.length() > 500 ? body.substring(0, 500) : body);
+        }
+        String t = sb.toString().trim();
+        return t.length() > 1000 ? t.substring(0, 1000) : t;
+    }
+
+    // 임베딩 계산 및 저장 (기동 시 1회)
+    public void computeAndStoreEmbedding(chunkDTO c) {
+        try {
+            String text = buildEmbeddingText(c);
+            if (text == null || text.isBlank()) return;
+            float[] vec = embeddingModel.embed(TextSegment.from(text)).content().vector();
+            c.setEmbedding(vec);
+        } catch (Exception e) {
+            System.err.println("[청크임베딩] 실패: " + e.getMessage());
+        }
+    }
+
+    // 코사인 유사도
+    private float cosine(float[] a, float[] b) {
+        if (a == null || b == null || a.length != b.length) return 0f;
+        float dot = 0f, na = 0f, nb = 0f;
+        for (int i = 0; i < a.length; i++) {
+            dot += a[i] * b[i]; na += a[i] * a[i]; nb += b[i] * b[i];
+        }
+        return (na == 0 || nb == 0) ? 0f : dot / (float)(Math.sqrt(na) * Math.sqrt(nb));
+    }
+
+    // 벡터 유사도 top-K 검색 (유사도 0.85 이상, 카테고리 필터)
+    public List<chunkDTO> searchByVector(String question, int topK, String category) {
+        return searchByVector(question, topK, category, null, 0.85f);
+    }
+
+    /**
+     * chunkType + minSimilarity 파라미터 오버로드
+     * @param chunkType "LAW" | "MANUAL" | null(전체)
+     * @param minSimilarity 코사인 유사도 최소값 (LAW: 0.80, MANUAL: 0.70 권장)
+     */
+    public List<chunkDTO> searchByVector(String question, int topK, String category,
+                                         String chunkType, float minSimilarity) {
+        if (question == null || question.isBlank()) return Collections.emptyList();
+        try {
+            float[] qVec = embeddingModel.embed(TextSegment.from(question)).content().vector();
+            String cat = normalizeCategory(category);
+            String type = (chunkType == null || chunkType.isBlank()) ? "" : chunkType.trim();
+            rwLock.readLock().lock();
+            try {
+                return store.stream()
+                        .filter(c -> cat.isEmpty() || normalizeCategory(c.getCategory()).equals(cat))
+                        .filter(c -> type.isEmpty() || type.equals(
+                                c.getChunkType() != null ? c.getChunkType() : "LAW"))
+                        .filter(c -> c.getEmbedding() != null)
+                        .map(c -> new AbstractMap.SimpleEntry<>(c, cosine(qVec, c.getEmbedding())))
+                        .filter(e -> e.getValue() >= minSimilarity)
+                        .sorted((a, b) -> Float.compare(b.getValue(), a.getValue()))
+                        .limit(topK)
+                        .map(Map.Entry::getKey)
+                        .collect(Collectors.toList());
+            } finally {
+                rwLock.readLock().unlock();
+            }
+        } catch (Exception e) {
+            System.err.println("[청크벡터검색] 실패: " + e.getMessage());
+            return Collections.emptyList();
+        }
+    }
+
 }

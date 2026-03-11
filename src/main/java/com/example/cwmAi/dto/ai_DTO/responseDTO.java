@@ -35,7 +35,8 @@ public class responseDTO {
      */
     public String getContent() {
         if (message != null && message.getContent() != null) {
-            return message.getContent();
+            // Qwen3 thinking 모드: <think>...</think> 블록 제거
+            return message.getContent().replaceAll("(?s)<think>.*?</think>", "").trim();
         }
         return null;
     }

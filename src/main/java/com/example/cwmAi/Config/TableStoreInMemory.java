@@ -6,15 +6,132 @@ import java.util.concurrent.locks.ReentrantReadWriteLock;
 import org.springframework.stereotype.Component;
 
 import com.example.cwmAi.dto.doc_DTO.TableDoc;
+import dev.langchain4j.model.embedding.EmbeddingModel;
+import dev.langchain4j.data.segment.TextSegment;
 
 @Component
 public class TableStoreInMemory {
 
     // 0224 김소연(수정): 표를 별도 저장소로 관리 (B안)
-    // 이유: 청킹 단계에서 표를 무조건 병합하면 컨텍스트 폭발 + 성능 저하 + 오탐 증가
-    //      질문 시점에 1개만 선택해서 붙이기 위해 표만 따로 저장
     private final List<TableDoc> store = new ArrayList<>();
     private final ReentrantReadWriteLock rwLock = new ReentrantReadWriteLock();
+
+    // EmbeddingModelConfig에서 주입된 싱글턴 사용
+    private final EmbeddingModel embeddingModel;
+
+    public TableStoreInMemory(EmbeddingModel embeddingModel) {
+        this.embeddingModel = embeddingModel;
+    }
+
+    // ── 표 텍스트 추출 (임베딩용) ──────────────────────────────────────
+    // fallback(페이지 전체 텍스트) vs 일반 표(셀 내용 합치기) 구분 처리
+    public String extractTableText(TableDoc t) {
+        if (t == null) return "";
+
+        // 0225 김소연(수정): fallback 모드면 페이지 전체 텍스트 사용
+        if (t.isPageFallback()) {
+            String pt = t.getPageFullText();
+            if (pt == null || pt.isBlank()) return "";
+            return pt.length() > 1000 ? pt.substring(0, 1000) : pt;
+        }
+
+        // 일반 표: 캡션 + 제목 + 셀 내용 전부 합치기
+        if (t.getTableData() == null) return "";
+        StringBuilder sb = new StringBuilder();
+        if (t.getCaption() != null && !t.getCaption().isBlank()) sb.append(t.getCaption()).append(" ");
+        if (t.getTitle()   != null && !t.getTitle().isBlank())   sb.append(t.getTitle()).append(" ");
+        for (List<String> row : t.getTableData()) {
+            if (row == null) continue;
+            for (String cell : row) {
+                if (cell != null && !cell.isBlank()) sb.append(cell.trim()).append(" ");
+            }
+        }
+        String text = sb.toString().trim();
+        return text.length() > 1000 ? text.substring(0, 1000) : text;
+    }
+
+    // ── 임베딩 계산 및 저장 ───────────────────────────────────────────
+    public void computeAndStoreEmbedding(TableDoc t) {
+        try {
+            String text = extractTableText(t);
+            if (text.isBlank()) return;
+            float[] vector = embeddingModel.embed(TextSegment.from(text))
+                    .content().vector();
+            t.setEmbedding(vector);
+        } catch (Exception e) {
+            System.err.println("[표임베딩] 실패 tableId=" + t.getTableId() + " / " + e.getMessage());
+        }
+    }
+
+    // ── 코사인 유사도 계산 ─────────────────────────────────────────────
+    private float cosineSimilarity(float[] a, float[] b) {
+        if (a == null || b == null || a.length != b.length) return 0f;
+        float dot = 0f, normA = 0f, normB = 0f;
+        for (int i = 0; i < a.length; i++) {
+            dot   += a[i] * b[i];
+            normA += a[i] * a[i];
+            normB += b[i] * b[i];
+        }
+        return (normA == 0 || normB == 0) ? 0f : dot / (float)(Math.sqrt(normA) * Math.sqrt(normB));
+    }
+
+    // ── 벡터 유사도 기반 top-K 표 검색 ───────────────────────────────
+    // question: 사용자 질문, topK: 반환할 표 수, category: 카테고리 필터(null이면 전체)
+    public List<TableDoc> findTopKByVector(String question, int topK, String category) {
+        if (question == null || question.isBlank()) return Collections.emptyList();
+        try {
+            float[] qVec = embeddingModel.embed(TextSegment.from(question))
+                    .content().vector();
+            String c = normalize(category);
+
+            rwLock.readLock().lock();
+            try {
+                return store.stream()
+                        .filter(t -> c.isEmpty() || normalize(t.getCategory()).equals(c))
+                        .filter(t -> t.getEmbedding() != null)
+                        .map(t -> new AbstractMap.SimpleEntry<>(t, cosineSimilarity(qVec, t.getEmbedding())))
+                        .filter(e -> e.getValue() > 0.30f)  // 최소 유사도 0.30 미만은 제외
+                        .sorted((a, b) -> Float.compare(b.getValue(), a.getValue()))
+                        .limit(topK)
+                        .map(Map.Entry::getKey)
+                        .collect(java.util.stream.Collectors.toList());
+            } finally {
+                rwLock.readLock().unlock();
+            }
+        } catch (Exception e) {
+            System.err.println("[표벡터검색] 실패: " + e.getMessage());
+            return Collections.emptyList();
+        }
+    }
+
+    // ── caption 직접 일치 검색 (별표3 등 직접 언급 시 1순위) ────────────
+    public Optional<TableDoc> findByCaption(String caption, String category) {
+        if (caption == null || caption.isBlank()) return Optional.empty();
+        String c = normalize(category);
+        // 공백 제거 정규화: "별표 3" == "별표3" 동일하게 취급
+        String cap = caption.trim().replaceAll("\\s+", "");
+        rwLock.readLock().lock();
+        try {
+            return store.stream()
+                    .filter(t -> c.isEmpty() || normalize(t.getCategory()).equals(c))
+                    .filter(t -> t.getCaption() != null &&
+                            t.getCaption().trim().replaceAll("\\s+", "").equals(cap))
+                    .findFirst();
+        } finally {
+            rwLock.readLock().unlock();
+        }
+    }
+
+    // 편의 메서드: top-1 반환
+    public Optional<TableDoc> findBestByVector(String question, String category) {
+        List<TableDoc> result = findTopKByVector(question, 1, category);
+        return result.isEmpty() ? Optional.empty() : Optional.of(result.get(0));
+    }
+
+    // 편의 메서드: top-2 반환
+    public List<TableDoc> findTop2ByVector(String question, String category) {
+        return findTopKByVector(question, 2, category);
+    }
 
     public void clearAll() {
         rwLock.writeLock().lock();

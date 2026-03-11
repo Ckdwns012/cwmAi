@@ -32,6 +32,9 @@ public class ChatRequest {
     // 스트리밍 사용 여부
     private Boolean stream = false;
 
+    // qwen3 thinking 모드 비활성화 (기본값 true → 4분 소요 문제)
+    private Boolean think = false;
+
     // 사용자 편의를 위한 오버로드된 생성자 (기본값 사용)
     public ChatRequest(String model, List<messageDTO> messages) {
         this.model = model;

@@ -37,8 +37,8 @@ dependencies {
 	implementation 'org.springframework.boot:spring-boot-starter-webflux'
 
 	//DB접근
-	//implementation 'org.mybatis.spring.boot:mybatis-spring-boot-starter:3.0.5'
-	//implementation 'mysql:mysql-connector-java:8.0.33'
+//	implementation 'org.mybatis.spring.boot:mybatis-spring-boot-starter:3.0.5'
+//	implementation 'mysql:mysql-connector-java:8.0.33'
 
 	//JWT토큰 방식 로그인
 	implementation 'io.jsonwebtoken:jjwt-api:0.11.5'
@@ -51,7 +51,8 @@ dependencies {
 	// 검색기능 향상을 위한 라이브러리 추가
 	implementation 'dev.langchain4j:langchain4j:0.31.0'
 	implementation 'dev.langchain4j:langchain4j-open-ai:0.31.0' // LM Studio API 호환용
-	implementation 'dev.langchain4j:langchain4j-embeddings-all-minilm-l6-v2:0.31.0' // 임베딩 모델
+	implementation 'dev.langchain4j:langchain4j-embeddings-all-minilm-l6-v2:0.31.0' // 기존 모델 (fallback용 유지)
+	implementation 'dev.langchain4j:langchain4j-ollama:0.31.0' // 한국어 임베딩용 Ollama 연동
 
 	// 0223 김소연(수정): 구조화 파싱(표 추출) 위해 tabula-java 추가
 	// 이유: PDFBox 텍스트만으로는 표/셀 구조가 유실되어 <표1> 참조 매핑이 어려움

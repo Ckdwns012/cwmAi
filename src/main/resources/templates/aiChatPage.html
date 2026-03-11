@@ -73,8 +73,30 @@
         .user { background-color: #007bff; color: white; align-self: flex-end; margin-left: auto; }
         .ai { background-color: #e9ecef; color: #333; margin-right: auto; }
         .ai-avatar { width: 24px; height: 24px; border-radius: 50%; flex-shrink: 0; object-fit: cover; background-color: #e9ecef; align-self: flex-start; margin-top: 0; }
-        .message-content { flex: 1; margin: 0; padding: 0; line-height: 1.4; }
-        .message-content span { display: inline-block; vertical-align: top; }
+        .message-content { flex: 1; margin: 0; padding: 0; line-height: 1.4; white-space: normal; }
+        .message-content span { display: inline-block; vertical-align: top; white-space: pre-wrap; }
+        /* 마크다운 렌더링 후 span을 block으로 전환 */
+        .message-content span.rendered { display: block; white-space: normal; }
+        /* 마크다운 표 스타일 */
+        .message-content table { border-collapse: collapse; width: 100%; margin: 8px 0; font-size: 13px; }
+        .message-content th, .message-content td { border: 1px solid #ccc; padding: 6px 10px; text-align: left; vertical-align: top; line-height: 1.5; }
+        .message-content th { background-color: #eef2ff; font-weight: bold; }
+        .message-content tr:nth-child(even) td { background-color: #f9f9f9; }
+        /* 마크다운 ul/li 스타일 */
+        .message-content ul,
+        .message-content ol {
+            margin: 4px 0;
+            padding-left: 20px;
+            list-style-position: outside;
+        }
+        .message-content li {
+            margin: 2px 0;
+        }
+        /* 숫자 목록(1.~10.) 정렬을 위해 숫자 폭을 균등하게 설정 */
+        .message-content ol li {
+            font-variant-numeric: tabular-nums;
+            font-feature-settings: "tnum" 1;
+        }
         .loading { font-style: italic; color: gray; }
         .related-articles-btn {
             margin-top: 10px;
@@ -100,6 +122,46 @@
             background-color: white;
             border-left: 3px solid #007bff;
             border-radius: 4px;
+        }
+
+        /* O/X 피드백 버튼 */
+        .feedback-area {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-top: 8px;
+            margin-bottom: 16px; /* 피드백 아래에 여백을 줘서 다음 질문과 간격 확보 */
+            padding-left: 30px; /* 아바타 너비만큼 들여쓰기 */
+        }
+        .feedback-label {
+            font-size: 12px;
+            color: #888;
+        }
+        .feedback-btn {
+            padding: 4px 14px;
+            border: none;
+            border-radius: 20px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: bold;
+            transition: all 0.2s ease;
+        }
+        .feedback-btn.ok {
+            background-color: #e8f5e9;
+            color: #2e7d32;
+            border: 1px solid #a5d6a7;
+        }
+        .feedback-btn.ok:hover { background-color: #c8e6c9; }
+        .feedback-btn.ng {
+            background-color: #fce4ec;
+            color: #c62828;
+            border: 1px solid #f48fb1;
+        }
+        .feedback-btn.ng:hover { background-color: #f8bbd0; }
+        .feedback-result {
+            font-size: 12px;
+            color: #888;
+            font-style: italic;
         }
 
         .chat-input-area { display: flex; gap: 10px; }
@@ -140,6 +202,7 @@
         .close:hover, .close:focus { color: #333; text-decoration: none; }
         #uploadForm button { width: 100%; padding: 10px; margin-top: 15px; background-color: #28a745; color: white; border: none; border-radius: 5px; cursor: pointer; }
     </style>
+    <script src="https://cdn.jsdelivr.net/npm/marked@9/marked.min.js"></script>
 </head>
 <body>
 <div class="container">
@@ -177,7 +240,7 @@
         </div>
         <div class="file-list-container">
             <h3>업로드된 파일</h3>
-            <div class="file-selection-info" id="fileSelectionInfo">선택된 파일: 0개 (최소 1개, 최대 5개)</div>
+            <div class="file-selection-info" id="fileSelectionInfo">💡 파일을 선택하면 더 빠르고 정확한 답변을 받을 수 있어요!</div>
             <ul id="fileList"></ul>
         </div>
         <div class="upload-button-area" id="uploadButtonArea" style="display: none;">
@@ -247,180 +310,241 @@
         return interval; // interval ID 반환하여 나중에 clearInterval 할 수 있게 함
     }
 
+    // ── AI 메시지 말풍선 DOM 생성 헬퍼 ──────────────────────────────
+    function createAiMessageDiv() {
+        const messageDiv = document.createElement('div');
+        messageDiv.classList.add('message', 'ai');
+        const avatar = document.createElement('img');
+        avatar.src = '/images/Cw_ci.png';
+        avatar.alt = 'AI';
+        avatar.classList.add('ai-avatar');
+        avatar.onerror = function() { this.style.display = 'none'; };
+        const content = document.createElement('div');
+        content.classList.add('message-content');
+        const textSpan = document.createElement('span');
+        content.appendChild(textSpan);
+        messageDiv.appendChild(avatar);
+        messageDiv.appendChild(content);
+        return { messageDiv, textSpan };
+    }
+
+    // ── O/X 피드백 버튼 렌더링 ──────────────────────────────────────
+    // pendingKey: 서버에서 받은 임시 캐시 키
+    function renderFeedbackButtons(pendingKey) {
+        const feedbackArea = document.createElement('div');
+        feedbackArea.classList.add('feedback-area');
+
+        const label = document.createElement('span');
+        label.classList.add('feedback-label');
+        label.textContent = '이 답변이 도움이 됐나요?';
+
+        const okBtn = document.createElement('button');
+        okBtn.classList.add('feedback-btn', 'ok');
+        okBtn.textContent = '✓ 맞아요';
+
+        const ngBtn = document.createElement('button');
+        ngBtn.classList.add('feedback-btn', 'ng');
+        ngBtn.textContent = '✗ 틀렸어요';
+
+        const resultText = document.createElement('span');
+        resultText.classList.add('feedback-result');
+
+        okBtn.addEventListener('click', async () => {
+            okBtn.disabled = true;
+            ngBtn.disabled = true;
+            await fetch(`/lm/api/feedback?pendingKey=${encodeURIComponent(pendingKey)}&approved=true`, { method: 'POST' });
+            okBtn.style.display = 'none';
+            ngBtn.style.display = 'none';
+            resultText.textContent = '✓ 저장되었습니다.';
+        });
+
+        ngBtn.addEventListener('click', async () => {
+            okBtn.disabled = true;
+            ngBtn.disabled = true;
+            await fetch(`/lm/api/feedback?pendingKey=${encodeURIComponent(pendingKey)}&approved=false`, { method: 'POST' });
+            okBtn.style.display = 'none';
+            ngBtn.style.display = 'none';
+            resultText.textContent = '저장되지 않았습니다. 필요하면 다시 질문해 주세요.';
+        });
+
+        feedbackArea.appendChild(label);
+        feedbackArea.appendChild(okBtn);
+        feedbackArea.appendChild(ngBtn);
+        feedbackArea.appendChild(resultText);
+        return feedbackArea;
+    }
+
+    // ── HTTP 에러 체크 헬퍼 ─────────────────────────────────────────
+    function checkResponse(res) {
+        if (res.status === 401) {
+            alert('로그인 세션이 만료되었습니다.\n다시 로그인해주세요.');
+            window.location.href = '/loginPage';
+            throw new Error('SESSION_EXPIRED');
+        }
+        if (!res.ok) {
+            throw new Error(`HTTP_${res.status}`);
+        }
+        return res;
+    }
+
+    // ── 메인 질문 처리 함수 (재귀 재생성 지원) ──────────────────────
+    async function processQuestion(question, category, selectedFilesArray, loadingDiv, loadingText, animationIntervalRef) {
+
+        // 1단계: 관련 조항 추천
+        const stage1Body = { files: selectedFilesArray };
+        console.group('[DEBUG] Stage1 요청');
+        console.log('질문:', question);
+        console.log('카테고리:', category);
+        console.log('선택 파일:', selectedFilesArray.length > 0 ? selectedFilesArray : '없음 (전체 검색)');
+        console.groupEnd();
+
+        const stage1Res = await fetch(
+            `/lm/api/ask/stage1?question=${encodeURIComponent(question)}&category=${encodeURIComponent(category)}`,
+            {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(stage1Body)
+            }
+        );
+        checkResponse(stage1Res);
+        const recommendedTitles = await stage1Res.json();
+        console.log('[DEBUG] Stage1 결과 (LLM1이 선택한 조항):', recommendedTitles);
+
+        if (!recommendedTitles || recommendedTitles.length === 0) {
+            clearInterval(animationIntervalRef.id);
+            chatBox.removeChild(loadingDiv);
+            const { messageDiv, textSpan } = createAiMessageDiv();
+            textSpan.textContent = '해당 분야의 관련 조항을 찾을 수 없습니다. 보다 정확한 법률 용어로 다시 질문해주세요.';
+            chatBox.appendChild(messageDiv);
+            chatBox.scrollTop = chatBox.scrollHeight;
+            sendBtn.disabled = false;
+            return;
+        }
+
+        // 2단계: 최종 답변 생성
+        clearInterval(animationIntervalRef.id);
+        loadingText.textContent = '조항검색 완료! 답변을 생성중입니다';
+        animationIntervalRef.id = startDotAnimation(loadingText, '조항검색 완료! 답변을 생성중입니다');
+        chatBox.scrollTop = chatBox.scrollHeight;
+
+        const stage2Res = await fetch(
+            `/lm/api/ask/stage2?question=${encodeURIComponent(question)}&category=${encodeURIComponent(category)}`,
+            {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(recommendedTitles)
+            }
+        );
+        checkResponse(stage2Res);
+
+        // stage2 응답은 이제 JSON { answer, pendingKey }
+        const stage2Result = await stage2Res.json();
+        const answer = stage2Result.answer;
+        const pendingKey = stage2Result.pendingKey;
+
+        clearInterval(animationIntervalRef.id);
+        chatBox.removeChild(loadingDiv);
+
+        const { messageDiv, textSpan } = createAiMessageDiv();
+        chatBox.appendChild(messageDiv);
+
+        renderAnswerMessage(textSpan, answer, () => {
+            // 타이핑 완료 후 O/X 피드백 버튼 표시
+            if (pendingKey) {
+                const feedbackArea = renderFeedbackButtons(pendingKey);
+                // 예전처럼 답변 "아래"에 별도 블록으로 붙이되,
+                // 각 답변마다 하나씩 생성되므로 이후 질문을 해도 이전 답변에 대한 선택은 유지됨
+                chatBox.appendChild(feedbackArea);
+            }
+            sendBtn.disabled = false;
+            userInput.focus();
+            chatBox.scrollTop = chatBox.scrollHeight;
+        });
+    }
+
     sendBtn.addEventListener('click', async () => {
         const question = userInput.value.trim();
-        if(!question || sendBtn.disabled) return;
+        if (!question || sendBtn.disabled) return;
 
-        // 전송 버튼만 비활성화 (회색으로 표시)
         sendBtn.disabled = true;
-
-        // UI/UX 개선: 말풍선 스타일 적용
-        chatBox.innerHTML += `<div class="message user">나: ${question}</div>`;
+        // innerHTML을 직접 건드리면 기존 노드에 걸려 있던 이벤트 리스너가 모두 날아가므로,
+        // DOM 노드를 생성해서 appendChild로 추가한다.
+        const userMessageDiv = document.createElement('div');
+        userMessageDiv.classList.add('message', 'user');
+        userMessageDiv.textContent = `나: ${question}`;
+        chatBox.appendChild(userMessageDiv);
         userInput.value = '';
         chatBox.scrollTop = chatBox.scrollHeight;
 
         const loadingDiv = document.createElement('div');
         loadingDiv.classList.add('message', 'ai', 'loading');
-        const avatarImg = document.createElement('img');
-        avatarImg.src = '/images/Cw_ci.png';
-        avatarImg.alt = 'AI';
-        avatarImg.classList.add('ai-avatar');
-        avatarImg.onerror = function() { this.style.display = 'none'; };
-        const contentDiv = document.createElement('div');
-        contentDiv.classList.add('message-content');
+        const { messageDiv: _, textSpan: __ } = createAiMessageDiv(); // 구조만 참고
+        const loadingAvatar = document.createElement('img');
+        loadingAvatar.src = '/images/Cw_ci.png';
+        loadingAvatar.alt = 'AI';
+        loadingAvatar.classList.add('ai-avatar');
+        loadingAvatar.onerror = function() { this.style.display = 'none'; };
+        const loadingContent = document.createElement('div');
+        loadingContent.classList.add('message-content');
         const loadingText = document.createElement('span');
         loadingText.textContent = '관련조항을 검색중입니다';
-        contentDiv.appendChild(loadingText);
-        loadingDiv.appendChild(avatarImg);
-        loadingDiv.appendChild(contentDiv);
+        loadingContent.appendChild(loadingText);
+        loadingDiv.appendChild(loadingAvatar);
+        loadingDiv.appendChild(loadingContent);
         chatBox.appendChild(loadingDiv);
         chatBox.scrollTop = chatBox.scrollHeight;
 
-        // 1단계 점 애니메이션 시작
-        let animationInterval = startDotAnimation(loadingText, '관련조항을 검색중입니다');
+        const animationIntervalRef = { id: startDotAnimation(loadingText, '관련조항을 검색중입니다') };
 
         try {
             const category = categorySelect.value;
 
-            // 선택된 파일 목록 확인
-            if (selectedFiles.size === 0) {
-                alert('최소 1개의 파일을 선택해주세요.');
-                sendBtn.disabled = false;
-                return;
-            }
+            // selectedFiles가 비어있으면 전체 파일 검색 (files=[] → 백엔드에서 필터 없이 전체 청크 검색)
             const selectedFilesArray = Array.from(selectedFiles);
 
-            // ✅ [추가] 0단계: 캐시 확인 (LLM 호출 전에 먼저 체크)
+            // 0단계: 캐시 확인
             const cacheRes = await fetch(
                 `/lm/api/ask/cache-check?question=${encodeURIComponent(question)}&category=${encodeURIComponent(category)}`,
                 { method: 'POST' }
             );
-            if (!cacheRes.ok) throw new Error(`HTTP error! status: ${cacheRes.status}`);
+            checkResponse(cacheRes);
             const cacheResult = await cacheRes.json();
 
             if (cacheResult.cached === true) {
-                // ✅ 캐시 히트 → LLM 호출 없이 즉시 표시
-                clearInterval(animationInterval);
+                // 캐시 히트 → 즉시 표시 (이미 검증된 답변이므로 O/X 버튼 없음)
+                clearInterval(animationIntervalRef.id);
                 chatBox.removeChild(loadingDiv);
-
-                const messageDiv = document.createElement('div');
-                messageDiv.classList.add('message', 'ai');
-                const avatarImgC = document.createElement('img');
-                avatarImgC.src = '/images/Cw_ci.png';
-                avatarImgC.alt = 'AI';
-                avatarImgC.classList.add('ai-avatar');
-                avatarImgC.onerror = function() { this.style.display = 'none'; };
-                const contentDivC = document.createElement('div');
-                contentDivC.classList.add('message-content');
-                const textSpanC = document.createElement('span');
-                contentDivC.appendChild(textSpanC);
-                messageDiv.appendChild(avatarImgC);
-                messageDiv.appendChild(contentDivC);
+                const { messageDiv, textSpan } = createAiMessageDiv();
                 chatBox.appendChild(messageDiv);
-
-                typeMessage(textSpanC, ': ' + cacheResult.answer, () => {
+                renderAnswerMessage(textSpan, cacheResult.answer, () => {
                     sendBtn.disabled = false;
                     userInput.focus();
                 });
                 chatBox.scrollTop = chatBox.scrollHeight;
-                return; // 여기서 종료 (stage1, stage2 호출 안 함)
-            }
-
-            // ✅ 캐시 미스 → 기존 stage1 → stage2 플로우 진행
-
-            // 1단계: 관련 조항 추천
-            const stage1Res = await fetch(
-                `/lm/api/ask/stage1?question=${encodeURIComponent(question)}&category=${encodeURIComponent(category)}`,
-                {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ files: selectedFilesArray })
-                }
-            );
-            if (!stage1Res.ok) throw new Error(`HTTP error! status: ${stage1Res.status}`);
-
-            const recommendedTitles = await stage1Res.json();
-
-            if (!recommendedTitles || recommendedTitles.length === 0) {
-                clearInterval(animationInterval);
-                chatBox.removeChild(loadingDiv);
-                const errorDiv = document.createElement('div');
-                errorDiv.classList.add('message', 'ai');
-                const avatarImg = document.createElement('img');
-                avatarImg.src = '/images/Cw_ci.png';
-                avatarImg.alt = 'AI';
-                avatarImg.classList.add('ai-avatar');
-                avatarImg.onerror = function() { this.style.display = 'none'; };
-                const contentDiv = document.createElement('div');
-                contentDiv.classList.add('message-content');
-                contentDiv.textContent = '해당 분야의 관련 조항을 찾을 수 없습니다. 보다 정확한 법률 용어로 다시 질문해주세요.';
-                errorDiv.appendChild(avatarImg);
-                errorDiv.appendChild(contentDiv);
-                chatBox.appendChild(errorDiv);
-                chatBox.scrollTop = chatBox.scrollHeight;
-                sendBtn.disabled = false;
                 return;
             }
 
-            // 2단계: 최종 답변 생성
-            clearInterval(animationInterval);
-            loadingText.textContent = '조항검색 완료! 답변을 생성중입니다';
-            animationInterval = startDotAnimation(loadingText, '조항검색 완료! 답변을 생성중입니다');
-            chatBox.scrollTop = chatBox.scrollHeight;
-
-            const stage2Res = await fetch(
-                `/lm/api/ask/stage2?question=${encodeURIComponent(question)}&category=${encodeURIComponent(category)}`,
-                {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(recommendedTitles)
-                }
-            );
-            if (!stage2Res.ok) throw new Error(`HTTP error! status: ${stage2Res.status}`);
-
-            const answer = await stage2Res.text();
-            clearInterval(animationInterval);
-            chatBox.removeChild(loadingDiv);
-            const messageDiv = document.createElement('div');
-            messageDiv.classList.add('message', 'ai');
-            const avatarImg = document.createElement('img');
-            avatarImg.src = '/images/Cw_ci.png';
-            avatarImg.alt = 'AI';
-            avatarImg.classList.add('ai-avatar');
-            avatarImg.onerror = function() { this.style.display = 'none'; };
-            const contentDiv = document.createElement('div');
-            contentDiv.classList.add('message-content');
-            const textSpan = document.createElement('span');
-            contentDiv.appendChild(textSpan);
-            messageDiv.appendChild(avatarImg);
-            messageDiv.appendChild(contentDiv);
-            chatBox.appendChild(messageDiv);
-            typeMessage(textSpan, ': ' + answer, () => {
-                sendBtn.disabled = false;
-                userInput.focus();
-            });
+            // 캐시 미스 → stage1 → stage2 + O/X 피드백
+            await processQuestion(question, category, selectedFilesArray, loadingDiv, loadingText, animationIntervalRef);
 
         } catch (error) {
-            clearInterval(animationInterval);
-            chatBox.removeChild(loadingDiv);
-            const errorDiv = document.createElement('div');
-            errorDiv.classList.add('message', 'ai');
-            errorDiv.style.color = 'red';
-            const avatarImg = document.createElement('img');
-            avatarImg.src = '/images/Cw_ci.png';
-            avatarImg.alt = 'AI';
-            avatarImg.classList.add('ai-avatar');
-            avatarImg.onerror = function() { this.style.display = 'none'; };
-            const contentDiv = document.createElement('div');
-            contentDiv.classList.add('message-content');
-            contentDiv.textContent = `오류: ${error.message}. 서버 콘솔을 확인하세요.`;
-            errorDiv.appendChild(avatarImg);
-            errorDiv.appendChild(contentDiv);
-            chatBox.appendChild(errorDiv);
+            if (error.message === 'SESSION_EXPIRED') return; // alert+redirect 이미 처리됨
+            clearInterval(animationIntervalRef.id);
+            if (loadingDiv.parentNode) chatBox.removeChild(loadingDiv);
+            const { messageDiv, textSpan } = createAiMessageDiv();
+            messageDiv.style.color = 'red';
+            const msg = error.message || '';
+            if (msg.includes('HTTP_500') || msg.includes('HTTP_502') || msg.includes('HTTP_503')) {
+                textSpan.textContent = 'AI 서버에 일시적인 오류가 발생했습니다. 잠시 후 다시 시도해주세요.';
+            } else if (msg.includes('HTTP_')) {
+                textSpan.textContent = '요청 처리 중 오류가 발생했습니다. 페이지를 새로고침 후 다시 시도해주세요.';
+            } else {
+                textSpan.textContent = '네트워크 연결을 확인하고 다시 시도해주세요.';
+            }
+            chatBox.appendChild(messageDiv);
             sendBtn.disabled = false;
         }
         chatBox.scrollTop = chatBox.scrollHeight;
-
     });
 
 
@@ -558,6 +682,24 @@
             if (!response.ok) throw new Error('파일 목록을 불러오지 못했습니다.');
             const files = await response.json();
             renderFiles(files);
+
+            // [DEBUG] 카테고리 내 전체 청크 목록 출력
+            fetch(`/lm/api/debug/chunks?category=${encodeURIComponent(currentCategory)}`)
+                .then(r => r.json())
+                .then(chunks => {
+                    console.group(`[DEBUG] 카테고리: ${currentCategory} | 총 ${chunks.length}개 청크`);
+                    const byFile = {};
+                    chunks.forEach(c => {
+                        if (!byFile[c.file]) byFile[c.file] = [];
+                        byFile[c.file].push(`[${c.type}] ${c.article} ${c.title}`);
+                    });
+                    Object.entries(byFile).forEach(([file, titles]) => {
+                        console.group(`📄 ${file} (${titles.length}개)`);
+                        titles.forEach(t => console.log(t));
+                        console.groupEnd();
+                    });
+                    console.groupEnd();
+                });
         } catch (error) {
             console.error(error);
         }
@@ -567,12 +709,8 @@
         fileList.innerHTML = '';
         const currentCategory = categorySelect.value;
 
-        // 분야가 변경되면 선택된 파일 초기화
+        // 분야가 변경되면 선택된 파일 초기화 (기본: 전체 검색)
         selectedFiles.clear();
-
-        // 최초 로드 시 상위 3개 자동 선택
-        const filesToSelect = files.slice(0, Math.min(3, files.length));
-        filesToSelect.forEach(file => selectedFiles.add(file));
 
         files.forEach((file, index) => {
             const li = document.createElement('li');
@@ -602,20 +740,9 @@
         const checkbox = document.querySelector(`input[data-filename="${filename}"]`);
 
         if (checkbox.checked) {
-            // 최대 5개 제한
-            if (selectedFiles.size >= 5) {
-                checkbox.checked = false;
-                alert('최대 5개까지만 선택할 수 있습니다.');
-                return;
-            }
             selectedFiles.add(filename);
         } else {
-            // 최소 1개 제한
-            if (selectedFiles.size <= 1) {
-                checkbox.checked = true;
-                alert('최소 1개는 선택해야 합니다.');
-                return;
-            }
+            // 선택 해제: 0개가 되면 "전체 파일 검색" 모드로 동작하도록 허용
             selectedFiles.delete(filename);
         }
 
@@ -625,13 +752,12 @@
     // 파일 선택 정보 업데이트
     function updateFileSelectionInfo() {
         const count = selectedFiles.size;
-        fileSelectionInfo.textContent = `선택된 파일: ${count}개 (최소 1개, 최대 5개)`;
         if (count === 0) {
-            fileSelectionInfo.style.color = '#dc3545';
-        } else if (count === 5) {
-            fileSelectionInfo.style.color = '#ffc107';
+            fileSelectionInfo.textContent = '💡 파일을 선택하지 않으면 현재 분야의 전체 파일을 참고해 답변드려요.';
+            fileSelectionInfo.style.color = '#0072ce';
         } else {
-            fileSelectionInfo.style.color = '#666';
+            fileSelectionInfo.textContent = `선택된 파일: ${count}개 · 선택한 파일을 우선적으로 참고해 답변드려요.`;
+            fileSelectionInfo.style.color = '#28a745';
         }
     }
 
@@ -646,13 +772,18 @@
 
         try {
             const response = await fetch('/upload', { method: 'POST', body: formData });
+            if (response.status === 401) {
+                alert('로그인 세션이 만료되었습니다.\n다시 로그인해주세요.');
+                window.location.href = '/loginPage';
+                return;
+            }
             const result = await response.json();
 
             alert(result.message);
             if (result.status === "success") {
                 categorySelect.value = uploadCategory; // 업로드한 분야로 전환
                 closeUploadModal();
-                loadFiles(); // 성공 시 목록 새로고침 (RAG에 바로 반영)
+                loadFiles(); // 성공 시 목록 새로고침
             }
         } catch (err) {
             alert("업로드 중 오류 발생: " + err.message);
@@ -689,9 +820,14 @@
                 method: 'DELETE',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ filename, category: currentCategory }),
-                credentials: 'include'   // ✅ 쿠키(JWT) 보내기
+                credentials: 'include'
             });
 
+            if (response.status === 401) {
+                alert('로그인 세션이 만료되었습니다.\n다시 로그인해주세요.');
+                window.location.href = '/loginPage';
+                return;
+            }
             const result = await response.text();
             alert(result);
 
@@ -702,6 +838,23 @@
         } catch (err) {
             alert("삭제 중 오류 발생: " + err.message);
         }
+    }
+
+    // 답변 메시지 렌더링: 타이핑 애니메이션 후 마크다운 HTML로 변환
+    function renderAnswerMessage(element, rawAnswer, callback) {
+        // 타이핑 중에는 <br>을 줄바꿈으로 치환해 깔끔하게 표시
+        const textForTyping = rawAnswer.replace(/<br\s*\/?>/gi, '\n');
+        typeMessage(element, textForTyping, () => {
+            // 타이핑 완료 후 마크다운 → HTML 렌더링
+            try {
+                element.classList.add('rendered');
+                // 블록 요소(p 등) 앞에 따로 ":"를 두지 않고, 바로 내용이 시작되도록 렌더링
+                element.innerHTML = marked.parse(rawAnswer);
+            } catch (e) {
+                console.warn('[marked] 파싱 실패, 텍스트 유지:', e);
+            }
+            if (callback) callback();
+        });
     }
 
     // 타이핑 효과로 메시지 표시
@@ -731,7 +884,7 @@
 
     // 페이지 로드 시 초기 인사 메시지 표시
     function showInitialGreeting(selectedCategory) {
-        const greetingMessage = ': 안녕하세요, 저는 법률 및 규정 어시스턴트에요. 관련 분야를 선택하고 질문해 주세요.';
+        const greetingMessage = '안녕하세요, 저는 건설근로자공제회 업무 어시스턴트에요.\n관련 분야를 선택하고 질문해 주세요.';
         const messageDiv = document.createElement('div');
         messageDiv.classList.add('message', 'ai');
         const avatarImg = document.createElement('img');
@@ -819,7 +972,7 @@
 
     // 분야 선택 메시지 업데이트 함수
     function updateCategoryMessage(selectedCategory) {
-        const message = `: 현재 선택된 분야는 "${selectedCategory}"입니다. 이 분야에 대한 질문을 해주세요.`;
+        const message = `현재 선택된 분야는 "${selectedCategory}"입니다. 이 분야에 대한 질문을 해주세요.\n오른쪽 파일 관리 탭에서 관련 파일을 선택하면 더 빠르고 정확한 답변을 받을 수 있습니다.\n선택하지 않으면 전체 파일을 참고하여 답변드려요.`;
 
         // 모든 분야 선택 메시지 찾기 (마지막 것을 찾기 위해)
         const allCategoryMessages = chatBox.querySelectorAll('.category-selection-message');
