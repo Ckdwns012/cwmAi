@@ -877,8 +877,21 @@
     uploadForm.addEventListener('submit', async (e) => {
         e.preventDefault();
         if (fileInput.files.length === 0) return;
+
+        const file = fileInput.files[0];
+        const fileName = file.name || '';
+        const lowerName = fileName.toLowerCase();
+
+        // PDF가 아니면 업로드를 막고, 사용자가 직접 PDF로 변환하도록 안내
+        if (!lowerName.endsWith('.pdf')) {
+            alert('현재 시스템은 PDF 파일만 업로드하여 분석합니다.\n\n선택하신 파일 형식은 "' +
+                fileName +
+                '" 입니다.\n\n해당 문서를 먼저 PDF로 변환한 뒤 다시 업로드해 주세요.');
+            return;
+        }
+
         const formData = new FormData();
-        formData.append('file', fileInput.files[0]); // 첫 번째 파일만 처리
+        formData.append('file', file); // 첫 번째 파일만 처리
         const uploadCategory = document.getElementById('uploadCategory').value;
         formData.append('category', uploadCategory);
 
