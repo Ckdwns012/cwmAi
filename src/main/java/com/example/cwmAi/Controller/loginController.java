@@ -35,10 +35,10 @@ public class loginController {
             cookie.setHttpOnly(true); // XSS 방지
             cookie.setPath("/");
             response.addCookie(cookie);
-            model.addAttribute("message","sign in success");
             return "redirect:/aiChatPage";
         }else{
-            model.addAttribute("message","login fail");
+            model.addAttribute("message","아이디 또는 비밀번호가 올바르지 않습니다.");
+            model.addAttribute("loginDTO", loginDTO);
             return "loginPage";
         }
     }
@@ -57,10 +57,9 @@ public class loginController {
             cookie.setHttpOnly(true); // XSS 방지
             cookie.setPath("/");
             response.addCookie(cookie);
-            model.addAttribute("message","sign in success");
             return "redirect:/aiChatPage";
         }else{
-            model.addAttribute("message","sign in fail");
+            model.addAttribute("message","이미 사용 중인 아이디입니다.");
             return "signUpPage";
         }
     }
