@@ -50,19 +50,24 @@ public class uploadController {
     @Autowired
     private ResourceLoader resourceLoader;
     
-    // JAR 파일 실행 위치 기준 상대 경로 (uploads 폴더)
-    private static final String UPLOAD_DIR;
-    private static final String FILE_DIR;
+    // JAR 파일 실행 위치 기준 상대 경로
+    private static final String UPLOAD_DIR;   // 업로드된 파일 루트 (uploads)
+    private static final String FILE_DIR;     // 카테고리용 파일 루트 (현재는 uploads와 동일)
+    private static final String FORMAT_DIR;   // 업로드와 별도 보관하는 양식 폴더 (format)
     
     static {
         // 상대 경로를 절대 경로로 변환 (JAR 실행 위치 기준)
         UPLOAD_DIR = new File("uploads").getAbsolutePath();
-        FILE_DIR = UPLOAD_DIR;
+        FILE_DIR   = UPLOAD_DIR;
+        FORMAT_DIR = new File("format").getAbsolutePath();
+        
         // uploads 폴더가 없으면 생성
         File uploadDir = new File(UPLOAD_DIR);
         if (!uploadDir.exists()) {
             uploadDir.mkdirs();
         }
+        // format 폴더는 선택적으로 사용하므로, 존재하면 그대로 사용하고
+        // 없으면 자동 생성까진 강제하지 않는다(필요 시 수동 생성).
     }
     private static final List<String> DEFAULT_CATEGORIES = List.of(
             "경영전략",
@@ -301,9 +306,15 @@ public class uploadController {
     @ResponseBody // JSON 반환
     public List<String> apiListFiles(@RequestParam(value = "category", required = false) String category) {
         // 카테고리별 디렉터리가 없으면 빈 리스트 반환 (오류 대신 안전하게 처리)
-        File folder = (category == null || category.isBlank())
-                ? new File(FILE_DIR)
-                : new File(FILE_DIR, category);
+        File folder;
+        if (category == null || category.isBlank()) {
+            folder = new File(FILE_DIR);
+        } else if ("format".equals(category)) {
+            // 양식 전용 카테고리는 uploads가 아닌 별도 format 폴더에서 조회
+            folder = new File(FORMAT_DIR);
+        } else {
+            folder = new File(FILE_DIR, category);
+        }
 
         if (!folder.exists()) {
             return List.of();
@@ -382,9 +393,15 @@ public class uploadController {
             @RequestParam(value = "category", required = false) String category
     ) {
         try {
-            Path basePath = (category == null || category.isBlank())
-                    ? Paths.get(UPLOAD_DIR)
-                    : Paths.get(UPLOAD_DIR, category);
+            Path basePath;
+            if (category == null || category.isBlank()) {
+                basePath = Paths.get(UPLOAD_DIR);
+            } else if ("format".equals(category)) {
+                // 양식 파일은 프로젝트 루트의 format 폴더에서 다운로드
+                basePath = Paths.get(FORMAT_DIR);
+            } else {
+                basePath = Paths.get(UPLOAD_DIR, category);
+            }
             Path filePath = basePath.resolve(filename).normalize();
             Resource resource = new UrlResource(filePath.toUri());
 
