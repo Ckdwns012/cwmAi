@@ -85,7 +85,6 @@ public class SemanticCacheService {
     // EmbeddingModelConfig에서 주입된 싱글턴 사용
     public SemanticCacheService(EmbeddingModel embeddingModel) {
         this.embeddingModel = embeddingModel;
-        System.out.println("[SemanticCache] 임베딩 모델 주입 완료 (싱글턴)");
     }
 
     // ── Public API ───────────────────────────────────────────────
@@ -144,18 +143,11 @@ public class SemanticCacheService {
             float jaccard = jaccardSimilarity(question, best.questionKey);
             if (jaccard >= JACCARD_MIN) {
                 best.hitCount++;
-                System.out.printf("[SemanticCache] HIT  코사인=%.4f  Jaccard=%.4f  히트수=%d  질문='%s'  원본='%s'%n",
-                        bestScore, jaccard, best.hitCount,
-                        truncate(question, 40), truncate(best.questionKey, 40));
                 return Optional.of(best.answer);
             }
-            System.out.printf("[SemanticCache] MISS(Jaccard 미달) 코사인=%.4f  Jaccard=%.4f(기준=%.2f)  질문='%s'%n",
-                    bestScore, jaccard, JACCARD_MIN, truncate(question, 40));
             return Optional.empty();
         }
 
-        System.out.printf("[SemanticCache] MISS 최고유사도=%.4f  질문='%s'%n",
-                bestScore, truncate(question, 40));
         return Optional.empty();
     }
 
@@ -207,9 +199,6 @@ public class SemanticCacheService {
 
         String key = UUID.randomUUID().toString();
         cache.put(key, new CacheEntry(embedding, answer, category, question, sourceFiles));
-
-        System.out.printf("[SemanticCache] STORE 캐시항목수=%d  질문='%s'  참조파일=%s%n",
-                cache.size(), truncate(question, 40), sourceFiles);
     }
 
     /**
@@ -230,9 +219,6 @@ public class SemanticCacheService {
 
         String pendingKey = UUID.randomUUID().toString();
         pendingCache.put(pendingKey, new CacheEntry(embedding, answer, category, question, sourceFiles));
-
-        System.out.printf("[SemanticCache] PENDING key=%s  질문='%s'%n",
-                pendingKey.substring(0, 8), truncate(question, 40));
         return pendingKey;
     }
 
@@ -244,14 +230,9 @@ public class SemanticCacheService {
     public void approvePending(String pendingKey) {
         if (pendingKey == null) return;
         CacheEntry entry = pendingCache.remove(pendingKey);
-        if (entry == null) {
-            System.out.printf("[SemanticCache] APPROVE 실패 - 키 없음: %s%n", pendingKey.substring(0, 8));
-            return;
-        }
+        if (entry == null) return;
         if (cache.size() >= MAX_CACHE_SIZE) evictOldest();
         cache.put(UUID.randomUUID().toString(), entry);
-        System.out.printf("[SemanticCache] APPROVED → 캐시저장  key=%s  질문='%s'%n",
-                pendingKey.substring(0, 8), truncate(entry.questionKey, 40));
     }
 
     /**
@@ -261,11 +242,7 @@ public class SemanticCacheService {
      */
     public void rejectPending(String pendingKey) {
         if (pendingKey == null) return;
-        CacheEntry removed = pendingCache.remove(pendingKey);
-        if (removed != null) {
-            System.out.printf("[SemanticCache] REJECTED  key=%s  질문='%s'%n",
-                    pendingKey.substring(0, 8), truncate(removed.questionKey, 40));
-        }
+        pendingCache.remove(pendingKey);
     }
 
     /**
@@ -278,14 +255,9 @@ public class SemanticCacheService {
         if (category == null || category.isBlank()) return;
 
         String normalized = normalizeCategory(category);
-        int before = cache.size();
 
         cache.entrySet().removeIf(e ->
                 normalizeCategory(e.getValue().category).equals(normalized));
-
-        int removed = before - cache.size();
-        System.out.printf("[SemanticCache] INVALIDATE category='%s'  제거항목=%d  남은항목=%d%n",
-                category, removed, cache.size());
     }
 
     /**
@@ -298,26 +270,19 @@ public class SemanticCacheService {
     public void invalidateCacheByFile(String fileName, String category) {
         if (fileName == null || fileName.isBlank()) return;
         String normalized = normalizeCategory(category);
-        int before = cache.size();
 
         cache.entrySet().removeIf(e -> {
             CacheEntry ce = e.getValue();
             return normalizeCategory(ce.category).equals(normalized)
                     && ce.sourceFiles.contains(fileName);
         });
-
-        int removed = before - cache.size();
-        System.out.printf("[SemanticCache] INVALIDATE_BY_FILE file='%s' category='%s'  제거=%d  남은=%d%n",
-                fileName, category, removed, cache.size());
     }
 
     /**
      * 전체 캐시를 비운다.
      */
     public void clearAll() {
-        int size = cache.size();
         cache.clear();
-        System.out.println("[SemanticCache] CLEAR ALL  제거항목=" + size);
     }
 
     /**

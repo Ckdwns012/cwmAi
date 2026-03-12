@@ -27,7 +27,6 @@ public class EmbeddingModelConfig {
         // ── v3: bge-m3 (OLLAMA_MAX_LOADED_MODELS=2 설정, 한국어 검색 품질 향상) ──
         // 1024차원, 다국어 지원, AllMiniLmL6V2 대비 한국어 법령 도메인 검색 정확도 향상
         // 전제: 환경변수 OLLAMA_MAX_LOADED_MODELS=2 → qwen3와 동시 로딩으로 스왑 없음
-        System.out.println("[EmbeddingModel] bge-m3 사용 (1024차원, Ollama) — OLLAMA_MAX_LOADED_MODELS=2 적용");
         return OllamaEmbeddingModel.builder()
                 .baseUrl(OLLAMA_BASE_URL)
                 .modelName("bge-m3")

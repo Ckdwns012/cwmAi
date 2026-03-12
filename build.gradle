@@ -63,15 +63,8 @@ tasks.named('test') {
 	useJUnitPlatform()
 }
 
-// JAR 빌드 시 uploads 폴더와 이미지 파일 포함
-processResources {
-	from('uploads') {
-		into 'uploads'
-	}
-//	from('src/main/resources/static/images') {
-//		into 'static/images'
-//	}
-}
+// JAR에는 uploads/format 미포함. 실행 시 JAR와 같은 디렉터리의 uploads, format 폴더만 사용.
+// processResources { ... } 제거함.
 
 // 0223 김소연(수정): Spring Boot 기본 로깅(logback)과 slf4j-simple 충돌 방지
 // 이유: tabula/langchain 등 transitive dependency로 slf4j-simple이 들어오면 부팅 시 LoggerContext 충돌 발생
