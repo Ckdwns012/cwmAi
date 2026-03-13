@@ -415,11 +415,13 @@ public class uploadController {
     // 업로드 및 조회 시 허용할 파일 확장자 체크
     private boolean hasAllowedExtension(String name) {
         String lower = name.toLowerCase();
-        return lower.endsWith(".pdf") ||
-                lower.endsWith(".txt") ||
-                lower.endsWith(".hwp") ||
-                lower.endsWith(".jpg") ||
-                lower.endsWith(".png") ||
-                lower.endsWith(".jpeg");
+        // 현재 PDF만 파싱 지원. 추후 다른 확장자 파싱 기능 추가 시 아래 주석 해제
+        return lower.endsWith(".pdf");
+        // return lower.endsWith(".pdf") ||
+        //         lower.endsWith(".txt") ||
+        //         lower.endsWith(".hwp") ||
+        //         lower.endsWith(".jpg") ||
+        //         lower.endsWith(".png") ||
+        //         lower.endsWith(".jpeg");
     }
 }

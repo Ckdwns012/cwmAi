@@ -102,9 +102,9 @@ public class aiService {
 
         HttpClient httpClient = HttpClient.create()
                 .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, 30000)  // 연결 타임아웃 30초
-                .responseTimeout(Duration.ofMinutes(10))  // 응답 타임아웃 10분
+                .responseTimeout(Duration.ofSeconds(220))  // 응답 타임아웃 3분 40초
                 .doOnConnected(conn ->
-                        conn.addHandlerLast(new ReadTimeoutHandler(600))  // 읽기 타임아웃 10분 (600초)
+                        conn.addHandlerLast(new ReadTimeoutHandler(220))  // 읽기 타임아웃 3분 40초 (220초)
                                 .addHandlerLast(new WriteTimeoutHandler(60))  // 쓰기 타임아웃 1분
                 );
 

@@ -12,6 +12,11 @@ import java.util.regex.Pattern;
 @Component
 public class DocumentChunker {
 
+    /** MANUAL 목차 청킹 overlap: 이전 섹션 마지막 N자를 현재 청크 앞에 붙임 */
+    private static final int TOC_OVERLAP_CHARS = 150;
+    /** MANUAL fallback 문단 청킹 overlap: 직전 청크 마지막 N자를 다음 청크 앞에 유지 */
+    private static final int PARA_OVERLAP_CHARS = 100;
+
     /**
      * 하나의 법령 문서를 조(조항) 단위로 분할하여 청크를 생성한다.
      * 각 청크는 다음 정보를 포함한다.
