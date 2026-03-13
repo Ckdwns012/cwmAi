@@ -261,7 +261,24 @@
         .modal-content { background-color: #fff; margin: 15% auto; padding: 30px; border: 1px solid #888; width: 400px; border-radius: 10px; box-shadow: 0 5px 15px rgba(0,0,0,0.3); }
         .close { color: #aaa; float: right; font-size: 28px; font-weight: bold; cursor: pointer; }
         .close:hover, .close:focus { color: #333; text-decoration: none; }
-        #uploadForm button { width: 100%; padding: 10px; margin-top: 15px; background-color: #f8b616; color: #003b83; border: none; border-radius: 5px; cursor: pointer; }
+        /* 업로드 시작 / 양식 다운로드 버튼: 동일한 노란색 스타일 */
+        #uploadForm button[type="submit"],
+        #downloadFormatBtn {
+            width: 100%;
+            padding: 10px;
+            margin-top: 15px;
+            background-color: #f8b616; /* 기본은 노란색 */
+            color: #000;               /* 글자색 검정 */
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 13px;
+        }
+
+        #uploadForm button[type="submit"]:hover,
+        #downloadFormatBtn:hover {
+            background-color: #d0d0d0; /* hover 시 회색으로 전환 */
+        }
     </style>
     <script src="https://cdn.jsdelivr.net/npm/marked@9/marked.min.js"></script>
 </head>
@@ -322,6 +339,7 @@
             <br/><br/>
             <input type="file" id="fileInput" name="file" required />
             <button type="submit">업로드 시작</button>
+            <button type="button" id="downloadFormatBtn">양식 다운로드</button>
         </form>
     </div>
 </div>
@@ -615,12 +633,45 @@
     const fileInput = document.getElementById('fileInput');
     const uploadModal = document.getElementById('uploadModal');
     const fileSelectionInfo = document.getElementById('fileSelectionInfo');
+    const downloadFormatBtn = document.getElementById('downloadFormatBtn');
 
     // 선택된 파일 목록 관리
     let selectedFiles = new Set();
 
     function openUploadModal() { uploadModal.style.display = 'block'; }
     function closeUploadModal() { uploadModal.style.display = 'none'; fileInput.value = ''; }
+
+    // 업로드용 양식 다운로드 (format 카테고리에 있는 모든 파일을 한 번에 다운로드 시도)
+    async function downloadFormatFiles() {
+        try {
+            const res = await fetch('/api/files?category=' + encodeURIComponent('format'));
+            if (!res.ok) {
+                alert('양식 목록을 불러오지 못했습니다.');
+                return;
+            }
+            const files = await res.json();
+            if (!files || files.length === 0) {
+                alert('등록된 양식 파일이 없습니다.');
+                return;
+            }
+
+            // 각 파일에 대해 /files/download 호출 (브라우저가 여러 파일 다운로드를 허용해야 함)
+            files.forEach(filename => {
+                const a = document.createElement('a');
+                a.href = `/files/download?filename=${encodeURIComponent(filename)}&category=${encodeURIComponent('format')}`;
+                a.download = filename;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+            });
+        } catch (e) {
+            alert('양식 다운로드 중 오류가 발생했습니다: ' + e.message);
+        }
+    }
+
+    if (downloadFormatBtn) {
+        downloadFormatBtn.addEventListener('click', downloadFormatFiles);
+    }
 
     // 분야 옵션 초기화
     function setCategoryOptions(categories) {
@@ -826,8 +877,21 @@
     uploadForm.addEventListener('submit', async (e) => {
         e.preventDefault();
         if (fileInput.files.length === 0) return;
+
+        const file = fileInput.files[0];
+        const fileName = file.name || '';
+        const lowerName = fileName.toLowerCase();
+
+        // PDF가 아니면 업로드를 막고, 사용자가 직접 PDF로 변환하도록 안내
+        if (!lowerName.endsWith('.pdf')) {
+            alert('현재 시스템은 PDF 파일만 업로드하여 분석합니다.\n\n선택하신 파일 형식은 "' +
+                fileName +
+                '" 입니다.\n\n해당 문서를 먼저 PDF로 변환한 뒤 다시 업로드해 주세요.');
+            return;
+        }
+
         const formData = new FormData();
-        formData.append('file', fileInput.files[0]); // 첫 번째 파일만 처리
+        formData.append('file', file); // 첫 번째 파일만 처리
         const uploadCategory = document.getElementById('uploadCategory').value;
         formData.append('category', uploadCategory);
 
