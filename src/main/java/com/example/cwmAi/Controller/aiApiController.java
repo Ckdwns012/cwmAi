@@ -45,7 +45,15 @@ public class aiApiController {
         if (cached.isPresent()) {
             return Mono.just(Map.of("cached", true, "answer", cached.get()));
         }
-        return Mono.just(Map.of("cached", false));
+        boolean initializing = !aiService.isDocumentsReady();
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("cached", false);
+        result.put("initializing", initializing);
+        if (initializing) {
+            result.put("initPhase", aiService.getInitPhase());
+            result.put("initPercent", aiService.getInitPercent());
+        }
+        return Mono.just(result);
     }
 
     // 1단계: 관련 조항 추천 (POST)

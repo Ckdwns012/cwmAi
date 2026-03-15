@@ -378,13 +378,14 @@
         }
     });
 
-    // 점 애니메이션 함수
+    // 점 애니메이션 함수 (baseText: 문자열 또는 { base: string } — 객체면 매 틱마다 base 읽어서 % 뒤에도 ... 표시 가능)
     function startDotAnimation(element, baseText) {
         let dotCount = 0;
         const interval = setInterval(() => {
             dotCount = (dotCount % 3) + 1;
             const dots = '.'.repeat(dotCount);
-            element.textContent = baseText + dots;
+            const base = (baseText && typeof baseText === 'object' && 'base' in baseText) ? baseText.base : baseText;
+            element.textContent = base + dots;
         }, 500);
         return interval; // interval ID 반환하여 나중에 clearInterval 할 수 있게 함
     }
@@ -600,6 +601,17 @@
                     userInput.focus();
                 });
                 chatBox.scrollTop = chatBox.scrollHeight;
+                return;
+            }
+            if (cacheResult.initializing === true) {
+                // 문서 초기화 중 → stage1 호출 없이 안내 메시지만 표시
+                clearInterval(animationIntervalRef.id);
+                chatBox.removeChild(loadingDiv);
+                const { messageDiv, textSpan } = createAiMessageDiv();
+                textSpan.textContent = '문서를 초기화중입니다. 잠시만 기다려주세요.';
+                chatBox.appendChild(messageDiv);
+                chatBox.scrollTop = chatBox.scrollHeight;
+                sendBtn.disabled = false;
                 return;
             }
 
@@ -1007,7 +1019,35 @@
         element.dataset.typingInterval = typingInterval.toString();
     }
 
-    // 페이지 로드 시 초기 인사 메시지 표시
+    // 문서 초기화 완료될 때까지 폴링 (진행률 표시 갱신, 10초 간격). progressBaseRef 있으면 base만 갱신해 점 애니메이션은 % 뒤에도 유지
+    // 반환: { alreadyReady: boolean } — 처음부터 완료됐으면 true (완료 문구 생략용)
+    async function waitUntilDocumentsReady(loadingText, loadingIntervalId, progressBaseRef) {
+        const pollIntervalMs = 10000;
+        let firstCheck = true;
+        while (true) {
+            const res = await fetch(
+                `/lm/api/ask/cache-check?question=__ready__&category=`,
+                { method: 'POST' }
+            );
+            if (!res.ok) {
+                await new Promise(r => setTimeout(r, pollIntervalMs));
+                continue;
+            }
+            const data = await res.json();
+            if (data.initializing !== true) {
+                return { alreadyReady: firstCheck };
+            }
+            firstCheck = false;
+            if (loadingText && (data.initPhase != null || data.initPercent != null) && progressBaseRef) {
+                const phase = data.initPhase || '준비 중';
+                const pct = data.initPercent != null ? data.initPercent : 0;
+                progressBaseRef.base = '문서를 불러오는 중입니다 (' + phase + ') - ' + pct + '%';
+            }
+            await new Promise(r => setTimeout(r, pollIntervalMs));
+        }
+    }
+
+    // 페이지 로드 시 초기 인사 메시지 표시 (문서 초기화 완료 후에만 호출)
     function showInitialGreeting(selectedCategory) {
         const greetingMessage = '안녕하세요, 저는 건설근로자공제회 업무 어시스턴트에요.\n관련 분야를 선택하고 질문해 주세요.';
         const messageDiv = document.createElement('div');
@@ -1025,28 +1065,69 @@
         messageDiv.appendChild(contentDiv);
         chatBox.appendChild(messageDiv);
         typeMessage(textSpan, greetingMessage, () => {
-            // 초기 인사말 타이핑 완료 후, 선택된 분야가 있으면 분야 메시지 표시
             if (selectedCategory) {
                 updateCategoryMessage(selectedCategory);
             }
         });
     }
 
-    // 페이지 로드 시 분야/파일 목록 불러오기 및 초기 인사 메시지 표시
+    // 페이지 로드 시: 문서 불러오기 대기 → 완료 메시지 → 환영 메시지 순서로 표시
     async function initializePage() {
-        // admin 여부에 따라 UI 제어
         if (typeof isAdmin !== 'undefined' && isAdmin) {
-            // admin인 경우 모든 버튼 표시
             document.getElementById('addCategoryBtn').style.display = 'block';
             document.getElementById('uploadButtonArea').style.display = 'block';
         } else {
-            // admin이 아닌 경우 분야 추가, 파일 추가 버튼 숨김
             document.getElementById('addCategoryBtn').style.display = 'none';
             document.getElementById('uploadButtonArea').style.display = 'none';
         }
 
         await loadCategories();
         const selectedCategory = categorySelect.value;
+
+        // 문서 초기화 중에는 분야 선택·질문 입력·전송 비활성화
+        categorySelect.disabled = true;
+        userInput.disabled = true;
+        sendBtn.disabled = true;
+
+        // 1) 먼저 "문서를 불러오는 중입니다..." 로딩 말풍선 표시 (질문할 때와 동일한 스타일)
+        const loadingDiv = document.createElement('div');
+        loadingDiv.classList.add('message', 'ai', 'loading');
+        const loadingAvatar = document.createElement('img');
+        loadingAvatar.src = '/images/Cw_ci.png';
+        loadingAvatar.alt = 'AI';
+        loadingAvatar.classList.add('ai-avatar');
+        loadingAvatar.onerror = function() { this.style.display = 'none'; };
+        const loadingContent = document.createElement('div');
+        loadingContent.classList.add('message-content');
+        const loadingText = document.createElement('span');
+        loadingText.textContent = '문서를 불러오는 중입니다';
+        loadingContent.appendChild(loadingText);
+        loadingDiv.appendChild(loadingAvatar);
+        loadingDiv.appendChild(loadingContent);
+        chatBox.appendChild(loadingDiv);
+        chatBox.scrollTop = chatBox.scrollHeight;
+        const progressBaseRef = { base: '문서를 불러오는 중입니다' };
+        const loadingIntervalId = startDotAnimation(loadingText, progressBaseRef);
+
+        // 2) 문서 초기화 완료될 때까지 폴링 (응답에 진행 단계·퍼센트 있으면 base만 갱신 → % 뒤에도 ... 유지)
+        const { alreadyReady } = await waitUntilDocumentsReady(loadingText, loadingIntervalId, progressBaseRef);
+
+        clearInterval(loadingIntervalId);
+        // 문서 초기화 완료 → 분야 선택·질문 입력·전송 활성화
+        categorySelect.disabled = false;
+        userInput.disabled = false;
+        sendBtn.disabled = false;
+
+        if (alreadyReady) {
+            // 처음부터 완료된 경우: 완료 문구 없이 로딩 말풍선 제거 후 바로 환영 메시지
+            loadingDiv.remove();
+        } else {
+            // 대기한 경우: 같은 칸에 완료 문구 표시 후 환영 메시지
+            loadingText.textContent = '문서 초기화가 완료되었어요. 이제 질문을 시작해주세요!';
+        }
+        chatBox.scrollTop = chatBox.scrollHeight;
+
+        // 3) 환영 메시지 말풍선 두 개 추가 (안녕하세요... / 현재 선택된 분야...)
         showInitialGreeting(selectedCategory);
     }
 

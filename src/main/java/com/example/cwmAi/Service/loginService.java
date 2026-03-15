@@ -1,11 +1,15 @@
 package com.example.cwmAi.Service;
 
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
+import com.example.cwmAi.Repository.loginRepository;
 import com.example.cwmAi.Util.jwtUtil;
 import com.example.cwmAi.dto.loginDTO;
 
 import jakarta.annotation.PostConstruct;
+
+import java.time.LocalDateTime;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -15,37 +19,54 @@ public class loginService {
     private final jwtUtil jwtUtil;
     private final Map<String, String> userStore = new ConcurrentHashMap<>();
 
+    @Autowired(required = false)
+    private loginRepository loginRepository;
+
     public loginService(jwtUtil jwtUtil) {
         this.jwtUtil = jwtUtil;
     }
 
-    // 애플리케이션 시작 시 기본 계정 등록
+    // config.txt 없거나 DB_URL 없을 때만 사용 (로컬 인메모리)
     @PostConstruct
     public void init() {
         userStore.put("admin", "admin"); // 기본 관리자 계정
     }
-    //로그인
-    public String login(loginDTO loginDTO) {
-        String storedPw = userStore.get(loginDTO.getId());
 
+    /** IP는 DB 로그인 시 최근 로그인 기록용으로만 사용(선택). null 가능. */
+    public String login(loginDTO loginDTO, String clientIp) {
+        if (loginRepository != null) {
+            String storedPw = loginRepository.login(loginDTO);
+            if (storedPw != null && storedPw.equals(loginDTO.getPassword())) {
+                loginRepository.updateLastLogin(loginDTO.getId(), LocalDateTime.now(), clientIp != null ? clientIp : "");  // last_login_time, last_login_ip 갱신
+                return jwtUtil.createToken(loginDTO.getId());
+            }
+            return null;
+        }
+        String storedPw = userStore.get(loginDTO.getId());
         if (storedPw != null && storedPw.equals(loginDTO.getPassword())) {
             return jwtUtil.createToken(loginDTO.getId());
         }
         return null;
     }
-    //회원가입
-    public String signIn(loginDTO loginDTO) {
-        // 이미 존재하는 ID면 실패
-        if (userStore.containsKey(loginDTO.getId())) {
-            return null;
-        }
 
+    public String login(loginDTO loginDTO) {
+        return login(loginDTO, null);
+    }
+
+    public String signIn(loginDTO loginDTO) {
+        if (loginRepository != null) {
+            if (loginRepository.checkId(loginDTO.getId()) > 0) return null;
+            return loginRepository.signIn(loginDTO) > 0 ? jwtUtil.createToken(loginDTO.getId()) : null;
+        }
+        if (userStore.containsKey(loginDTO.getId())) return null;
         userStore.put(loginDTO.getId(), loginDTO.getPassword());
         return jwtUtil.createToken(loginDTO.getId());
     }
 
-    //ID 중복체크
     public String checkId(String id) {
+        if (loginRepository != null) {
+            return loginRepository.checkId(id) > 0 ? "fail" : "success";
+        }
         return userStore.containsKey(id) ? "fail" : "success";
     }
 }

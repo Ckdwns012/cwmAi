@@ -40,9 +40,8 @@ import java.util.Objects;
 public class aiService {
 
     /* =========================
-       설정값
+       설정값 (config.txt의 OLLAMA_HOST 없으면 로컬 기본값)
      ========================= */
-    private static final String OLLAMA_BASE_URL = "http://localhost:11434/api";
     private static final String MODEL_NAME = "qwen3:4b-instruct-2507-q4_K_M";
 
     // v2 모드에서 LLM2에 직접 전달할 청크 수 (LLM1 없이 바로 답변 — 컨텍스트 과부하 방지)
@@ -94,6 +93,25 @@ public class aiService {
     //0224 김소연(수정) - ObjectMapper 싱글톤 (기존 코드에서 매번 new로 생성하던 것을 필드로 이동)
     private final ObjectMapper objectMapper = new ObjectMapper();
 
+    /** 문서 초기화(loadAllDocuments) 완료 여부. false면 ask 시 "문서를 초기화중입니다" 메시지 반환 */
+    private volatile boolean documentsReady = false;
+    /** 초기화 진행 단계 설명 (프론트 표시용) */
+    private volatile String initPhase = "";
+    /** 초기화 진행률 0~100 */
+    private volatile int initPercent = 0;
+
+    public boolean isDocumentsReady() {
+        return documentsReady;
+    }
+
+    public String getInitPhase() {
+        return initPhase != null ? initPhase : "";
+    }
+
+    public int getInitPercent() {
+        return initPercent;
+    }
+
     /* =========================
        생성자
      ========================= */
@@ -103,7 +121,8 @@ public class aiService {
             VectorStoreInMemory vectorStore,
             StructuredDocumentParser structuredDocumentParser,
             TableStoreInMemory tableStore,
-            SemanticCacheService semanticCacheService
+            SemanticCacheService semanticCacheService,
+            @Value("${ollama.host:http://localhost:11434}") String ollamaHost
     ) {
         this.documentChunker = documentChunker;
         this.vectorStore = vectorStore;
@@ -119,8 +138,12 @@ public class aiService {
                                 .addHandlerLast(new WriteTimeoutHandler(60))  // 쓰기 타임아웃 1분
                 );
 
+        String baseUrl = (ollamaHost != null && !ollamaHost.isEmpty() ? ollamaHost : "http://localhost:11434").trim();
+        if (!baseUrl.endsWith("/api")) {
+            baseUrl = baseUrl.endsWith("/") ? baseUrl + "api" : baseUrl + "/api";
+        }
         this.webClient = webClientBuilder
-                .baseUrl(OLLAMA_BASE_URL)
+                .baseUrl(baseUrl)
                 .clientConnector(new ReactorClientHttpConnector(httpClient))
                 .build();
     }
@@ -148,19 +171,45 @@ public class aiService {
     // }
 
     public void loadAllDocuments() {
+        documentsReady = false;
+        initPhase = "문서 읽는 중";
+        initPercent = 0;
         categoryChunkCounter.clear();
+
         List<chunkDTO> allChunks = readAndChunkUploadedFilesToList(null);
+        initPhase = "청크 저장 중";
+        initPercent = 20;
         vectorStore.replaceAll(allChunks);
 
+        initPhase = "표 추출 중";
+        initPercent = 30;
         List<TableDoc> allTables = readAndExtractTablesToList(null);
         tableStore.replaceAll(allTables);
+
+        initPhase = "표 임베딩 중";
+        initPercent = 40;
         allTables.forEach(t -> tableStore.computeAndStoreEmbedding(t));
 
-        allChunks.forEach(c -> vectorStore.computeAndStoreEmbedding(c));
+        initPhase = "청크 임베딩 중";
+        final int chunkTotal = allChunks.size();
+        final int[] idx = { 0 };
+        allChunks.forEach(c -> {
+            vectorStore.computeAndStoreEmbedding(c);
+            idx[0]++;
+            if (chunkTotal > 0) {
+                initPercent = 50 + (int) (40L * idx[0] / chunkTotal);
+            }
+        });
 
+        initPhase = "검증 중";
+        initPercent = 95;
         checkChunksWithoutArticleTitle();
         validateAndReportChunks();
+
+        initPhase = "완료";
+        initPercent = 100;
         System.out.println("[cwmAi] 문서 초기화 완료. 청크 " + vectorStore.getSize() + "개");
+        documentsReady = true;
     }
 
     /**
@@ -322,6 +371,9 @@ public class aiService {
     // 0226 김소연(수정): askModel v2 - 벡터+키워드 top-50 필터링 후 LLM 1단계
     // 이유: 전체 조항 목록 → LLM 방식 대비 토큰 절감, 속도 개선
     public Mono<String> askModel(String userPrompt, String category) {
+        if (!documentsReady) {
+            return Mono.just("문서를 초기화중입니다 잠시만 기다려주세요.(10분~20분 소요)");
+        }
         if (ragPipelineVersion == 2) return askModelV2(userPrompt, category);
         // ① 캐시 확인
         Optional<String> cached = semanticCacheService.findCachedAnswer(userPrompt, category);
@@ -364,6 +416,10 @@ public class aiService {
 
     // 0226 김소연(수정): askModelWithStages v2 - 벡터+키워드 필터링 후 LLM 전달
     public Flux<aiResponseDTO> askModelWithStages(String userPrompt, String category) {
+        if (!documentsReady) {
+            return Flux.just(new aiResponseDTO("completed", null, null,
+                    "문서를 초기화중입니다 잠시만 기다려주세요.(10분~20분 소요)"));
+        }
         if (ragPipelineVersion == 2) return askModelWithStagesV2(userPrompt, category);
 
         Mono<aiResponseDTO> stage1Start = Mono.just(
@@ -490,7 +546,7 @@ public class aiService {
                 2. 업무매뉴얼 내용이 있으면 실무 절차를 먼저 설명하고, 법령 근거는 보조로 제시한다.
                 3. 법령 근거는 답변 맨 마지막에 한 번만 "[근거: 법령명 제○조]" 형식으로 작성한다.
                 4. 금액, 수치, 법령 조문 번호는 원문 그대로 유지한다.
-                5. 답변은 최대 10개 항목, 각 항목 2~3문장 이내로 간결하게 작성한다.
+                5. 답변은 결론을 먼저 안내하고, 그 다음 설명한다. 설명은 10개 항목 미만으로 하고, 각 항목 2~3문장 이내로 간결하게 작성한다.
                 6. 불필요한 설명, 반복 문장, 유사 표현을 금지한다.
                 7. 제공된 자료에 없는 내용은 절대 추가하지 않는다. 추론·유추·보완 답변을 금지한다.
 """));
@@ -579,6 +635,9 @@ public class aiService {
      * fileNames 필터 지원
      */
     public Mono<List<String>> recommendArticleTitles(String userPrompt, String category, List<String> fileNames) {
+        if (!documentsReady) {
+            return Mono.just(new ArrayList<>());
+        }
 
         List<chunkDTO> lawChunks;
         List<chunkDTO> manualChunks;
@@ -692,6 +751,9 @@ public class aiService {
      * @return 최종 답변
      */
     public Mono<String> generateFinalAnswer(String userPrompt, List<String> recommendedTitles, String category) {
+        if (!documentsReady) {
+            return Mono.just("문서를 초기화중입니다 잠시만 기다려주세요.(10분~20분 소요)");
+        }
         // 추천받은 조항 이름으로 실제 청크 조회
         List<chunkDTO> relevantChunks = vectorStore.getChunksByArticleTitles(recommendedTitles, category);
 
@@ -725,7 +787,7 @@ public class aiService {
                 2. 업무매뉴얼 내용이 있으면 실무 절차를 먼저 설명하고, 법령 근거는 보조로 제시한다.
                 3. 법령 근거는 답변 맨 마지막에 한 번만 "[근거: 법령명 제○조]" 형식으로 작성한다.
                 4. 금액, 수치, 법령 조문 번호는 원문 그대로 유지한다.
-                5. 답변은 최대 10개 항목, 각 항목 2~3문장 이내로 간결하게 작성한다.
+                5. 답변은 결론을 먼저 안내하고, 그 다음 설명한다. 설명은 10개 항목 미만으로 하고, 각 항목 2~3문장 이내로 간결하게 작성한다.
                 6. 불필요한 설명, 반복 문장, 유사 표현을 금지한다.
                 7. 제공된 자료에 없는 내용은 절대 추가하지 않는다. 추론·유추·보완 답변을 금지한다.
 """
