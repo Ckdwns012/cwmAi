@@ -10,7 +10,7 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
- * JAR와 같은 디렉터리의 config.txt를 읽어 key=value 맵으로 반환.
+ * 실행 위치(현재 작업 디렉터리, user.dir)의 config.txt를 읽어 key=value 맵으로 반환.
  * 없으면 빈 맵. # 으로 시작하는 줄과 빈 줄은 무시.
  */
 public final class ConfigLoader {
@@ -18,23 +18,13 @@ public final class ConfigLoader {
     public static final String CONFIG_FILENAME = "config.txt";
 
     /**
-     * JAR 기준 같은 디렉터리에서 config.txt 로드.
-     * IDE 등에서 실행 시에는 user.dir 기준.
+     * 현재 작업 디렉터리 기준 상대 경로로 config.txt 로드.
+     * - IDE 실행: 프로젝트 루트에서 실행하면 ./config.txt
+     * - JAR 실행: java -jar 를 실행한 현재 디렉터리의 ./config.txt
      */
     public static Map<String, String> load() {
         Map<String, String> out = new LinkedHashMap<>();
-        File baseDir;
-        try {
-            URI location = ConfigLoader.class.getProtectionDomain().getCodeSource().getLocation().toURI();
-            Path path = Paths.get(location);
-            if (Files.isRegularFile(path)) {
-                baseDir = path.getParent().toFile();
-            } else {
-                baseDir = new File(System.getProperty("user.dir"));
-            }
-        } catch (Exception e) {
-            baseDir = new File(System.getProperty("user.dir"));
-        }
+        File baseDir = new File(System.getProperty("user.dir"));
         File configFile = new File(baseDir, CONFIG_FILENAME);
         if (!configFile.exists() || !configFile.isFile()) {
             return out;
