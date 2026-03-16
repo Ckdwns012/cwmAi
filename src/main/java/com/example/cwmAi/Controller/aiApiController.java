@@ -45,11 +45,17 @@ public class aiApiController {
     ) {
         Optional<String> cached = semanticCacheService.findCachedAnswer(question, category);
         if (cached.isPresent()) {
-            System.out.println("[캐시HIT] 즉시 반환: " + question.substring(0, Math.min(40, question.length())));
             return Mono.just(Map.of("cached", true, "answer", cached.get()));
         }
-        System.out.println("[캐시MISS] LLM 호출: " + question.substring(0, Math.min(40, question.length())));
-        return Mono.just(Map.of("cached", false));
+        boolean initializing = !aiService.isDocumentsReady();
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("cached", false);
+        result.put("initializing", initializing);
+        if (initializing) {
+            result.put("initPhase", aiService.getInitPhase());
+            result.put("initPercent", aiService.getInitPercent());
+        }
+        return Mono.just(result);
     }
 
     // 1단계: 관련 조항 추천 (POST)
@@ -126,11 +132,9 @@ public class aiApiController {
     ) {
         if (approved) {
             semanticCacheService.approvePending(pendingKey);
-            System.out.println("[피드백] O(승인) → 캐시 저장: " + pendingKey.substring(0, 8));
             return Mono.just(Map.of("status", "approved"));
         } else {
             semanticCacheService.rejectPending(pendingKey);
-            System.out.println("[피드백] X(거절) → 캐시 미저장: " + pendingKey.substring(0, 8));
             return Mono.just(Map.of("status", "rejected"));
         }
     }

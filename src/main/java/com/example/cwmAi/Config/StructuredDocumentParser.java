@@ -61,8 +61,6 @@ public class StructuredDocumentParser {
     public List<TableDoc> extractTablesAsTableDocs(File pdfFile, String fileName, String category) throws Exception {
         List<TableDoc> result = new ArrayList<>();
 
-        System.out.println("[표추출] 시작(B안) file=" + pdfFile.getName());
-
         try (PDDocument pdDocument = PDDocument.load(pdfFile)) {
             ObjectExtractor extractor = new ObjectExtractor(pdDocument);
 
@@ -120,18 +118,10 @@ public class StructuredDocumentParser {
                     fallback.setPageFullText(pageText.trim());
                     totalTablesFound++;
                     result.add(fallback);
-                    System.out.println("[표추출] page=" + pageNum + " → 필터거부 fallback 저장 id=" + fallbackId);
                 }
 
                 if (filtered.isEmpty()) continue;
 
-                System.out.println("[표추출] file=" + pdfFile.getName()
-                        + ", page=" + pageNum
-                        + ", tables=" + filtered.size()
-                        + ", algo=" + (usedFallback ? "Basic" : "Spreadsheet")
-                        + (looksLikeTocPage ? ", tocPage=true" : ""));
-
-                // 캡션(표1/별표3) + 제목(가능하면) 추출
                 List<CaptionAndTitle> captions = extractCaptionsWithTitleFromPageText(pageText);
 
                 for (int i = 0; i < filtered.size(); i++) {
@@ -171,21 +161,14 @@ public class StructuredDocumentParser {
                     if (tableData != null && !tableData.isEmpty()) {
                         String header = String.join(" | ", tableData.get(0));
                         if (header.length() > 120) header = header.substring(0, 120);
-                        System.out.println("[표추출] id=" + tableId
-                                + ", caption=" + (td.getCaption() == null ? "" : td.getCaption())
-                                + ", title=" + (td.getTitle() == null ? "" : td.getTitle())
-                                + ", header=" + header);
                     }
 
                     result.add(td);
                 }
             }
 
-            System.out.println("[표추출] 완료(B안) file=" + pdfFile.getName()
-                    + ", totalTables=" + totalTablesFound);
+            return result;
         }
-
-        return result;
     }
 
     private String extractText(File file) throws Exception {

@@ -5,9 +5,7 @@ import com.example.cwmAi.dto.FileDeleteRequest;
 import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.core.io.Resource;
-import org.springframework.core.io.ResourceLoader;
 import org.springframework.core.io.UrlResource;
-import org.springframework.core.io.support.ResourcePatternResolver;
 import org.springframework.http.ContentDisposition;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.ResponseEntity;
@@ -19,10 +17,9 @@ import org.springframework.web.multipart.MultipartFile;
 
 import com.example.cwmAi.Service.aiService;
 
-import jakarta.annotation.PostConstruct;
 import java.io.File;
 import java.io.IOException;
-import java.io.InputStream;
+import java.net.URI;
 import java.net.MalformedURLException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -46,120 +43,39 @@ class UploadResponse {
 public class uploadController {
     @Autowired
     private aiService aiService;
-    
-    @Autowired
-    private ResourceLoader resourceLoader;
-    
-    // JAR 파일 실행 위치 기준 상대 경로
-    private static final String UPLOAD_DIR;   // 업로드된 파일 루트 (uploads)
-    private static final String FILE_DIR;     // 카테고리용 파일 루트 (현재는 uploads와 동일)
-    private static final String FORMAT_DIR;   // 업로드와 별도 보관하는 양식 폴더 (format)
-    
+
+    private static final String UPLOAD_DIR;
+    private static final String FILE_DIR;
+    private static final String FORMAT_DIR;
     static {
-        // 상대 경로를 절대 경로로 변환 (JAR 실행 위치 기준)
-        UPLOAD_DIR = new File("uploads").getAbsolutePath();
-        FILE_DIR   = UPLOAD_DIR;
-        FORMAT_DIR = new File("format").getAbsolutePath();
-        
-        // uploads 폴더가 없으면 생성
-        File uploadDir = new File(UPLOAD_DIR);
-        if (!uploadDir.exists()) {
-            uploadDir.mkdirs();
+        File baseDir;
+        try {
+            URI location = uploadController.class.getProtectionDomain().getCodeSource().getLocation().toURI();
+            Path path = Paths.get(location);
+            // JAR로 실행 시: path가 jar 파일 → 그 부모 디렉터리를 기준으로 uploads/format 사용
+            if (Files.isRegularFile(path)) {
+                baseDir = path.getParent().toFile();
+            } else {
+                // IDE 등에서 실행 시: user.dir(프로젝트 루트) 기준
+                baseDir = new File(System.getProperty("user.dir"));
+            }
+        } catch (Exception e) {
+            baseDir = new File(System.getProperty("user.dir"));
         }
-        // format 폴더는 선택적으로 사용하므로, 존재하면 그대로 사용하고
-        // 없으면 자동 생성까진 강제하지 않는다(필요 시 수동 생성).
+        UPLOAD_DIR = new File(baseDir, "uploads").getAbsolutePath();
+        FILE_DIR   = UPLOAD_DIR;
+        FORMAT_DIR = new File(baseDir, "format").getAbsolutePath();
+        if (!new File(UPLOAD_DIR).exists()) new File(UPLOAD_DIR).mkdirs();
+        if (!new File(FORMAT_DIR).exists()) new File(FORMAT_DIR).mkdirs();
     }
     private static final List<String> DEFAULT_CATEGORIES = List.of(
-            "경영전략",
-            "고객복지",
-            "정보화",
-            "퇴직공제",
-            "회계총무"
+            "경영전략", "고객복지", "정보화", "퇴직공제", "회계총무"
     );
 
     /**
-     * JAR 내부의 uploads 리소스를 외부 uploads 폴더로 복사
-     * 애플리케이션 시작 시 한 번만 실행
+     * JAR와 같은 디렉터리의 uploads, format 폴더만 사용합니다.
+     * 배포 시 해당 폴더를 JAR 옆에 두고 파일을 넣으면 됩니다. (JAR 내부 복사 없음)
      */
-    @PostConstruct
-    public void copyUploadsFromJar() {
-        try {
-            // ResourceLoader가 ResourcePatternResolver를 구현하는지 확인
-            ResourcePatternResolver resolver = resourceLoader instanceof ResourcePatternResolver 
-                ? (ResourcePatternResolver) resourceLoader
-                : new org.springframework.core.io.support.PathMatchingResourcePatternResolver(resourceLoader);
-            
-            // JAR 내부의 uploads 폴더의 모든 파일 찾기
-            Resource[] resources = resolver.getResources("classpath:uploads/**");
-            
-            if (resources.length == 0) {
-                // JAR 내부에 uploads 폴더가 없으면 (개발 환경 등) 그냥 리턴
-                return;
-            }
-            
-            // JAR 환경인지 확인 (개발 환경에서는 파일 시스템 경로를 사용하므로 복사하지 않음)
-            boolean isJarEnvironment = false;
-            for (Resource resource : resources) {
-                try {
-                    String uri = resource.getURI().toString();
-                    if (uri.startsWith("jar:")) {
-                        isJarEnvironment = true;
-                        break;
-                    }
-                } catch (Exception e) {
-                    // URI를 가져올 수 없으면 건너뛰기
-                    continue;
-                }
-            }
-            
-            // JAR 환경이 아니면 (로컬 개발 환경) 복사하지 않음
-            if (!isJarEnvironment) {
-                return;
-            }
-            
-            int copiedCount = 0;
-            for (Resource resource : resources) {
-                if (!resource.isReadable() || resource.getFilename() == null) {
-                    continue;
-                }
-                
-                String resourcePath = resource.getURI().toString();
-                // classpath:uploads/... 또는 jar:file:.../uploads/... 형태
-                String relativePath = resourcePath.contains("uploads/") 
-                    ? resourcePath.substring(resourcePath.indexOf("uploads/") + 8) 
-                    : resource.getFilename();
-                
-                // 디렉토리는 건너뛰기 (파일만 복사)
-                if (relativePath.endsWith("/")) {
-                    continue;
-                }
-                
-                // 외부 파일 경로 생성
-                File destFile = new File(UPLOAD_DIR, relativePath);
-                
-                // 기존 파일이 있으면 건너뛰기 (덮어쓰지 않음)
-                if (destFile.exists()) {
-                    continue;
-                }
-                
-                // 디렉토리 생성
-                destFile.getParentFile().mkdirs();
-                
-                // 파일 복사
-                try (InputStream inputStream = resource.getInputStream()) {
-                    Files.copy(inputStream, destFile.toPath(), StandardCopyOption.REPLACE_EXISTING);
-                    copiedCount++;
-                }
-            }
-            
-            if (copiedCount > 0) {
-                System.out.println("JAR 내부에서 " + copiedCount + "개의 파일을 외부 uploads 폴더로 복사했습니다.");
-            }
-        } catch (Exception e) {
-            // JAR 내부에 uploads가 없거나 복사 실패 시 오류 무시 (정상적인 경우일 수 있음)
-            System.out.println("JAR 내부의 uploads 폴더를 외부로 복사하는 중 오류 발생 (무시됨): " + e.getMessage());
-        }
-    }
     @RequestMapping("uploadPage")
     public String uploadPage(){
         return "uploadPage";

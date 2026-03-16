@@ -59,13 +59,13 @@ public class jwtUtil {
         this.key = Keys.hmacShaKeyFor(secret.getBytes(StandardCharsets.UTF_8));
     }
 
-    // 토큰 생성 (기본 1시간)
+    // 토큰 생성 (3시간)
     public String createToken(String id) {
         long now = System.currentTimeMillis();
         return Jwts.builder()
                 .setSubject(id)
                 .setIssuedAt(new Date(now))
-                .setExpiration(new Date(now + 1000L * 60 * 60))
+                .setExpiration(new Date(now + 1000L * 60 * 60 * 3))
                 .signWith(key)
                 .compact();
     }
