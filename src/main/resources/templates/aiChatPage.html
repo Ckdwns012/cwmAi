@@ -279,6 +279,60 @@
         #downloadFormatBtn:hover {
             background-color: #d0d0d0; /* hover 시 회색으로 전환 */
         }
+
+        /* 매뉴얼 작성 가이드 버튼 */
+        #guideBtn {
+            width: 100%;
+            padding: 10px;
+            margin-top: 10px;
+            background-color: #fff;
+            color: #003b83;
+            border: 1px solid #003b83;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 13px;
+        }
+        #guideBtn:hover { background-color: #eef2ff; }
+
+        /* 가이드 모달 */
+        #guideModal .modal-content {
+            width: 620px;
+            margin: 5% auto;
+            max-height: 85vh;
+            overflow-y: auto;
+        }
+        .guide-section { margin-bottom: 18px; }
+        .guide-section h4 { margin: 0 0 8px 0; color: #003b83; font-size: 14px; }
+        .guide-desc { font-size: 13px; color: #444; line-height: 1.7; background: #f8f9fa; border-radius: 6px; padding: 12px 14px; }
+        .guide-desc code { background: #e8edf7; border-radius: 3px; padding: 1px 5px; font-family: monospace; font-size: 12px; }
+        .prompt-box {
+            width: 100%;
+            box-sizing: border-box;
+            height: 280px;
+            padding: 12px;
+            border: 1px solid #ccc;
+            border-radius: 6px;
+            font-size: 12px;
+            font-family: monospace;
+            line-height: 1.6;
+            color: #333;
+            resize: vertical;
+            background: #fafafa;
+        }
+        #copyPromptBtn {
+            width: 100%;
+            padding: 10px;
+            margin-top: 10px;
+            background-color: #003b83;
+            color: #fff;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 13px;
+            font-weight: 600;
+        }
+        #copyPromptBtn:hover { background-color: #002a5e; }
+        #copyPromptBtn.copied { background-color: #2e7d32; }
     </style>
     <script th:src="@{/js/marked.min.js}"></script>
 </head>
@@ -340,7 +394,81 @@
             <input type="file" id="fileInput" name="file" required />
             <button type="submit">업로드 시작</button>
             <button type="button" id="downloadFormatBtn">양식 다운로드</button>
+            <button type="button" id="guideBtn" onclick="openGuideModal()">매뉴얼 작성 가이드 보기</button>
         </form>
+    </div>
+</div>
+
+<!-- 매뉴얼 작성 가이드 모달 -->
+<div id="guideModal" class="modal">
+    <div class="modal-content">
+        <span class="close" onclick="closeGuideModal()">&times;</span>
+        <h3 style="margin-top: 0; color: #003b83;">매뉴얼 작성 가이드</h3>
+
+        <div class="guide-section">
+            <h4>파일 유형 자동 판별</h4>
+            <div class="guide-desc">
+                파일명에 <code>법</code>, <code>규정</code>, <code>지침</code>, <code>시행령</code>, <code>시행규칙</code>, <code>법률</code> 단어가 포함되면 <strong>법령 문서</strong>로 인식됩니다.
+                그 외 파일은 모두 <strong>업무 매뉴얼</strong>로 인식되므로, 매뉴얼 파일명에 위 단어를 포함하지 마세요.
+            </div>
+        </div>
+
+        <div class="guide-section">
+            <h4>업무 매뉴얼 구조 규칙</h4>
+            <div class="guide-desc">
+                목차 번호(<code>1.</code> / <code>01</code> / <code>I.</code>)는 줄 맨 앞에 위치해야 하며,
+                번호 뒤에는 <strong>업무명</strong>을 작성하세요.<br>
+                해당 업무에 관한 절차, 기한, 유의사항 등 모든 내용을 그 섹션 안에 함께 작성해야
+                AI가 "어떤 업무의 내용인지" 파악할 수 있습니다.<br><br>
+                - 특수 기호 <code>①②③</code>, <code>◆</code>, <code>▶</code> 등은 PDF 변환 시 깨질 수 있으니
+                <code>(1) (2) (3)</code> 또는 <code>-</code> 를 사용하세요.<br>
+                - 섹션당 권장 분량: <strong>200~800자</strong>
+            </div>
+        </div>
+
+        <div class="guide-section" style="background:#eef7ee; border-radius:6px; padding:10px 14px; font-size:13px; color:#2e7d32;">
+            실제 작성 예시 파일은 이전 화면의 <strong>양식 다운로드</strong> 버튼에서 확인할 수 있습니다.
+        </div>
+
+        <div class="guide-section">
+            <h4>타 AI(ChatGPT 등)에 붙여넣기용 프롬프트</h4>
+            <textarea id="guidePromptText" class="prompt-box" readonly>아래 [업무 내용]을 읽고, 우리 내부 AI 시스템에 업로드할 업무 매뉴얼 형식으로 정리해 주세요.
+
+[작성 규칙]
+1. 목차 번호(1. / 2. / 01 / 02 형식)는 반드시 줄 맨 앞에 위치하고,
+   번호 뒤에는 "업무명"을 작성하세요.
+   - 예: "1. 연차 신청", "2. 출장비 정산", "3. 경조사비 지급"
+   - 신청 절차, 유의사항 같은 하위 내용을 번호로 쪼개지 마세요.
+
+2. 각 업무 섹션 안에 그 업무에 관한 모든 내용을 포함하세요.
+   - 업무 개요, 신청 절차, 처리 기한, 관련 서식, 유의사항을
+     하나의 섹션 안에 서술하세요.
+   - 섹션당 200~800자 분량을 권장합니다.
+
+3. 단계를 나열할 때는 특수 기호 대신 (1) (2) (3) 형식을 사용하세요.
+   - ①②③, ◆, ▶, ▷ 등 특수 기호는 시스템에서 읽히지 않을 수 있습니다.
+   - 글머리는 "-" 또는 "*"를 사용하세요.
+- 원본 문서가 담고 있는 것들은 조금의 누락도 없이 전부 읽어주세요.(빠진 내용 X)
+[출력 예시]
+1. 연차 신청
+연차는 사용 예정일 3일 전까지 시스템에서 신청해야 한다.
+신청 절차: (1) 시스템 로그인 → (2) 연차 신청서 작성 → (3) 팀장 결재
+처리 기한: 신청 후 2영업일 이내 승인 완료.
+유의사항
+- 마감일 초과 시 다음 달로 이월된다.
+- 반차는 오전/오후 구분하여 신청한다.
+
+2. 출장비 정산
+출장 완료 후 5영업일 이내 정산 신청을 완료해야 한다.
+신청 절차: (1) 영수증 원본 수집 → (2) 정산서 작성 → (3) 경리팀 이메일 제출
+유의사항
+- 식비는 1인 1만 원 한도이며 초과분은 본인 부담이다.
+- 증빙서류 미제출 시 정산이 거절된다.
+
+[업무 내용]
+(여기에 정리할 원본 내용을 붙여넣으세요)</textarea>
+            <button id="copyPromptBtn" onclick="copyGuidePrompt()">복사하기</button>
+        </div>
     </div>
 </div>
 
@@ -652,6 +780,28 @@
 
     function openUploadModal() { uploadModal.style.display = 'block'; }
     function closeUploadModal() { uploadModal.style.display = 'none'; fileInput.value = ''; }
+
+    const guideModal = document.getElementById('guideModal');
+    function openGuideModal() { guideModal.style.display = 'block'; }
+    function closeGuideModal() { guideModal.style.display = 'none'; }
+
+    function copyGuidePrompt() {
+        const text = document.getElementById('guidePromptText').value;
+        navigator.clipboard.writeText(text).then(() => {
+            const btn = document.getElementById('copyPromptBtn');
+            btn.textContent = '복사 완료!';
+            btn.classList.add('copied');
+            setTimeout(() => {
+                btn.textContent = '복사하기';
+                btn.classList.remove('copied');
+            }, 2000);
+        });
+    }
+
+    // 가이드 모달 외부 클릭 시 닫기
+    guideModal.addEventListener('click', (e) => {
+        if (e.target === guideModal) closeGuideModal();
+    });
 
     // 업로드용 양식 다운로드 (format 카테고리에 있는 모든 파일을 한 번에 다운로드 시도)
     async function downloadFormatFiles() {

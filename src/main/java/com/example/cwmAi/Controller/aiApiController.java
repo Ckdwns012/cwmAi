@@ -8,6 +8,8 @@ import com.example.cwmAi.Service.aiService;
 
 import reactor.core.publisher.Mono;
 
+import java.time.Duration;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Optional;
@@ -69,7 +71,12 @@ public class aiApiController {
             java.util.List<String> filesList = (java.util.List<String>) requestBody.get("files");
             files = filesList;
         }
-        return aiService.recommendArticleTitles(question, category, files);
+        return aiService.recommendArticleTitles(question, category, files)
+                .timeout(Duration.ofSeconds(220))
+                .onErrorResume(e -> {
+                    System.out.println("[Stage1 타임아웃/에러] " + e.getMessage());
+                    return Mono.just(Collections.emptyList());
+                });
     }
 
     // 2단계: 최종 답변 생성 (POST)
@@ -90,6 +97,14 @@ public class aiApiController {
                         result.put("pendingKey", pendingKey);
                     }
                     return result;
+                })
+                .timeout(Duration.ofSeconds(220))
+                .onErrorResume(e -> {
+                    System.out.println("[Stage2 타임아웃/에러] " + e.getMessage());
+                    Map<String, Object> errorResult = new LinkedHashMap<>();
+                    errorResult.put("answer", "응답 시간이 초과되었습니다. 잠시 후 다시 시도해 주세요.");
+                    errorResult.put("pendingKey", null);
+                    return Mono.just(errorResult);
                 });
     }
 

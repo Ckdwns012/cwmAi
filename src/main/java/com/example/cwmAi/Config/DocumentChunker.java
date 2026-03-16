@@ -12,6 +12,11 @@ import java.util.regex.Pattern;
 @Component
 public class DocumentChunker {
 
+    /** MANUAL 목차 청킹 overlap: 이전 섹션 마지막 N자를 현재 청크 앞에 붙임 */
+    private static final int TOC_OVERLAP_CHARS = 150;
+    /** MANUAL fallback 문단 청킹 overlap: 직전 청크 마지막 N자를 다음 청크 앞에 유지 */
+    private static final int PARA_OVERLAP_CHARS = 100;
+
     /**
      * 하나의 법령 문서를 조(조항) 단위로 분할하여 청크를 생성한다.
      * 각 청크는 다음 정보를 포함한다.
@@ -411,6 +416,18 @@ public class DocumentChunker {
             int start = positions.get(i);
             int end = (i + 1 < positions.size()) ? positions.get(i + 1) : text.length();
             String sectionText = text.substring(start, end).trim();
+
+            // overlap: 이전 섹션 마지막 TOC_OVERLAP_CHARS자를 현재 청크 앞에 붙임
+            if (i > 0) {
+                int prevStart = positions.get(i - 1);
+                int prevEnd = positions.get(i);
+                String prevSection = text.substring(prevStart, prevEnd).trim();
+                if (prevSection.length() > TOC_OVERLAP_CHARS) {
+                    String overlap = prevSection.substring(prevSection.length() - TOC_OVERLAP_CHARS).trim();
+                    sectionText = "[이전 내용 요약]\n" + overlap + "\n\n" + sectionText;
+                }
+            }
+
             sectionText = cleanArticleText(sectionText);
             if (sectionText.length() < 30) continue;
 
@@ -451,7 +468,12 @@ public class DocumentChunker {
                 dto.setChunkType(chunkType);
                 chunks.add(dto);
                 idx++;
+                // overlap: 직전 청크 마지막 PARA_OVERLAP_CHARS자를 다음 청크 시작에 유지
+                String overlap = chunkText.length() > PARA_OVERLAP_CHARS
+                        ? chunkText.substring(chunkText.length() - PARA_OVERLAP_CHARS)
+                        : chunkText;
                 buffer.setLength(0);
+                buffer.append(overlap.trim()).append("\n");
             }
         }
 
