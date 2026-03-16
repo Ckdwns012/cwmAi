@@ -8,7 +8,8 @@
 </script>
 <head>
     <meta charset="UTF-8">
-    <title>AI 채팅 및 파일 관리 통합 페이지</title>
+    <title>CWMAI</title>
+    <link rel="icon" type="image/png" th:href="@{/images/Cw_ci.png}">
     <style>
         /* 기본 레이아웃 및 리셋 */
         body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 0; padding: 0; display: flex; height: 100vh; background-color: #f4f4f4; }
@@ -16,7 +17,7 @@
         .pane { padding: 20px; box-sizing: border-box; display: flex; flex-direction: column; background-color: #fff; }
         .left-pane { flex: 2; border-right: 1px solid #ddd; transition: flex 0.5s cubic-bezier(0.4, 0, 0.2, 1); }
         .left-pane.expanded { flex: 1; }
-        .right-pane { 
+        .right-pane {
             flex: 1;
             min-width: 300px;
             transition: flex 0.5s cubic-bezier(0.4, 0, 0.2, 1), min-width 0.5s cubic-bezier(0.4, 0, 0.2, 1), padding 0.5s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.3s ease, visibility 0s, transform 0.5s cubic-bezier(0.4, 0, 0.2, 1);
@@ -24,7 +25,7 @@
             visibility: visible;
             transform: translateX(0);
         }
-        .right-pane.hidden { 
+        .right-pane.hidden {
             flex: 0 0 0;
             min-width: 0;
             padding: 0;
@@ -37,7 +38,7 @@
             overflow: hidden;
             border: none;
         }
-        
+
         /* 파일 관리 영역 토글 버튼 */
         .toggle-file-pane-btn {
             position: absolute;
@@ -46,7 +47,7 @@
             transform: translateY(-50%);
             width: 40px;
             height: 80px;
-            background-color: #007bff;
+            background-color: #003b83;
             color: white;
             border: none;
             border-radius: 8px 0 0 8px;
@@ -60,7 +61,7 @@
             transition: all 0.3s ease;
         }
         .toggle-file-pane-btn:hover {
-            background-color: #0056b3;
+            background-color: #002a5e;
             width: 45px;
         }
         .toggle-file-pane-btn.hidden {
@@ -68,55 +69,177 @@
         }
 
         /* AI 채팅 영역 */
-        #chatBox { flex-grow: 1; border: 1px solid #ccc; border-radius: 8px; padding: 15px; overflow-y: auto; margin-bottom: 10px; background-color: #fafafa; }
+        #chatBox {
+            flex-grow: 1;
+            border: 1px solid rgba(255,255,255,0.9);
+            border-radius: 18px;
+            padding: 15px;
+            overflow-y: auto;
+            margin-bottom: 10px;
+            background: linear-gradient(160deg, rgba(205,212,222,0.75) 0%, rgba(215,220,230,0.62) 100%);
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            box-shadow:
+                0 8px 32px rgba(0,59,131,0.14),
+                inset 0 1px 0 rgba(255,255,255,0.80),
+                inset 0 -1px 0 rgba(0,59,131,0.06);
+        }
         .message { margin-bottom: 10px; padding: 8px 12px; border-radius: 15px; max-width: 80%; display: flex; align-items: flex-start; gap: 6px; }
-        .user { background-color: #007bff; color: white; align-self: flex-end; margin-left: auto; }
-        .ai { background-color: #e9ecef; color: #333; margin-right: auto; }
+        .user {
+            background: linear-gradient(135deg, #003b83, #2b485f);
+            color: white;
+            align-self: flex-end;
+            margin-left: auto;
+            box-shadow: 0 4px 14px rgba(0,59,131,0.25);
+        }
+        .ai {
+            background: rgba(255,255,255,0.75);
+            backdrop-filter: blur(8px);
+            -webkit-backdrop-filter: blur(8px);
+            color: #1a2a4a;
+            margin-right: auto;
+            border: 1px solid rgba(255,255,255,0.9);
+            box-shadow: 0 2px 10px rgba(0,59,131,0.07);
+        }
         .ai-avatar { width: 24px; height: 24px; border-radius: 50%; flex-shrink: 0; object-fit: cover; background-color: #e9ecef; align-self: flex-start; margin-top: 0; }
-        .message-content { flex: 1; margin: 0; padding: 0; line-height: 1.4; }
-        .message-content span { display: inline-block; vertical-align: top; }
+        .message-content { flex: 1; margin: 0; padding: 0; line-height: 1.4; white-space: normal; }
+        .message-content span { display: inline-block; vertical-align: top; white-space: pre-wrap; }
+        /* 마크다운 렌더링 후 span을 block으로 전환 */
+        .message-content span.rendered { display: block; white-space: normal; }
+        /* 마크다운 표 스타일 */
+        .message-content table { border-collapse: collapse; width: 100%; margin: 8px 0; font-size: 13px; }
+        .message-content th, .message-content td { border: 1px solid #ccc; padding: 6px 10px; text-align: left; vertical-align: top; line-height: 1.5; }
+        .message-content th { background-color: #eef2ff; font-weight: bold; }
+        .message-content tr:nth-child(even) td { background-color: #f9f9f9; }
+        /* 마크다운 ul/li 스타일 */
+        .message-content ul,
+        .message-content ol {
+            margin: 4px 0;
+            padding-left: 20px;
+            list-style-position: outside;
+        }
+        .message-content li {
+            margin: 2px 0;
+        }
+        /* 숫자 목록(1.~10.) 정렬을 위해 숫자 폭을 균등하게 설정 */
+        .message-content ol li {
+            font-variant-numeric: tabular-nums;
+            font-feature-settings: "tnum" 1;
+        }
         .loading { font-style: italic; color: gray; }
-        .related-articles-btn { 
-            margin-top: 10px; 
-            padding: 8px 16px; 
-            background-color: #007bff; 
-            color: white; 
-            border: none; 
-            border-radius: 8px; 
-            cursor: pointer; 
+        .related-articles-btn {
+            margin-top: 10px;
+            padding: 8px 16px;
+            background-color: #003b83;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
             font-size: 14px;
         }
-        .related-articles-container { 
-            margin-top: 10px; 
-            padding: 10px; 
-            background-color: #f8f9fa; 
-            border-radius: 8px; 
+        .related-articles-container {
+            margin-top: 10px;
+            padding: 10px;
+            background-color: #f8f9fa;
+            border-radius: 8px;
             display: none;
         }
         .related-articles-container.show { display: block; }
-        .article-item { 
-            padding: 8px; 
-            margin: 5px 0; 
-            background-color: white; 
-            border-left: 3px solid #007bff; 
+        .article-item {
+            padding: 8px;
+            margin: 5px 0;
+            background-color: white;
+            border-left: 3px solid #003b83;
             border-radius: 4px;
         }
 
+        /* O/X 피드백 버튼 */
+        .feedback-area {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-top: 8px;
+            margin-bottom: 16px; /* 피드백 아래에 여백을 줘서 다음 질문과 간격 확보 */
+            padding-left: 30px; /* 아바타 너비만큼 들여쓰기 */
+        }
+        .feedback-label {
+            font-size: 12px;
+            color: #888;
+        }
+        .feedback-btn {
+            padding: 4px 14px;
+            border: none;
+            border-radius: 20px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: bold;
+            transition: all 0.2s ease;
+        }
+        .feedback-btn.ok {
+            background-color: #e8f5e9;
+            color: #2e7d32;
+            border: 1px solid #a5d6a7;
+        }
+        .feedback-btn.ok:hover { background-color: #c8e6c9; }
+        .feedback-btn.ng {
+            background-color: #fce4ec;
+            color: #c62828;
+            border: 1px solid #f48fb1;
+        }
+        .feedback-btn.ng:hover { background-color: #f8bbd0; }
+        .feedback-result {
+            font-size: 12px;
+            color: #888;
+            font-style: italic;
+        }
+
         .chat-input-area { display: flex; gap: 10px; }
-        .chat-input-area input { flex-grow: 1; padding: 10px; border: 1px solid #ccc; border-radius: 8px; }
-        .chat-input-area button { padding: 10px 20px; background-color: #28a745; color: white; border: none; border-radius: 8px; cursor: pointer; transition: background-color 0.3s ease; }
-        .chat-input-area button:disabled { background-color: #6c757d; color: white; cursor: not-allowed; opacity: 0.6; }
+        .chat-input-area input {
+            flex-grow: 1;
+            padding: 12px 18px;
+            border: 1px solid rgba(0,59,131,0.2);
+            border-radius: 14px;
+            background: linear-gradient(160deg, rgba(255,255,255,0.75) 0%, rgba(238,244,255,0.65) 100%);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            color: #1a2a4a;
+            font-size: 14px;
+            outline: none;
+            box-shadow: 0 4px 22px rgba(0,59,131,0.12), inset 0 1px 0 rgba(255,255,255,0.98), inset 0 -1px 0 rgba(180,200,240,0.4);
+            transition: all 0.25s ease;
+        }
+        .chat-input-area input::placeholder { color: rgba(43,72,95,0.4); }
+        .chat-input-area input:focus {
+            border-color: rgba(0,59,131,0.35);
+            box-shadow: 0 4px 28px rgba(0,59,131,0.20), inset 0 1px 0 rgba(255,255,255,0.98), inset 0 -1px 0 rgba(150,180,230,0.5);
+            background: linear-gradient(160deg, rgba(235,242,255,0.85) 0%, rgba(220,233,255,0.75) 100%);
+        }
+        .chat-input-area button {
+            padding: 12px 22px;
+            background: linear-gradient(135deg, #f8b616, #e6a800);
+            color: #003b83;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: 700;
+            font-size: 14px;
+            transition: all 0.2s ease;
+            box-shadow: 0 4px 14px rgba(248,182,22,0.35);
+        }
+        .chat-input-area button:hover:not(:disabled) {
+            transform: translateY(-1px);
+            box-shadow: 0 6px 20px rgba(248,182,22,0.5);
+        }
+        .chat-input-area button:disabled { background: #d0d8e8; color: #8a9ab8; cursor: not-allowed; box-shadow: none; }
 
         .ai-response {
-        /* 이 설정이 핵심입니다. 공백과 줄바꿈을 그대로 화면에 표시해 줍니다. */
-        white-space: pre-wrap;
-
-        /* 채팅창의 크기와 스크롤 설정을 위한 기본 스타일 (선택사항) */
-        height: 400px;
-        overflow-y: auto;
-        border: 1px solid #ccc;
-        padding: 10px;
-        margin-bottom: 10px;}
+            white-space: pre-wrap;
+            height: 400px;
+            overflow-y: auto;
+            border: 1px solid #ccc;
+            padding: 10px;
+            margin-bottom: 10px;
+        }
 
         /* 파일 관리 영역 */
         .file-list-container { flex-grow: 1; overflow-y: auto; margin-bottom: 15px; }
@@ -125,49 +248,121 @@
         .file-item { display: flex; justify-content: space-between; align-items: center; padding: 10px 0; border-bottom: 1px solid #eee; }
         .file-item-content { display: flex; align-items: center; gap: 10px; flex: 1; }
         .file-item input[type="checkbox"] { width: 18px; height: 18px; cursor: pointer; margin: 0; }
-        .file-item a { text-decoration: none; color: #0056b3; flex: 1; }
+        .file-item a { text-decoration: none; color: #003b83; flex: 1; }
         .file-item a:hover { text-decoration: underline; }
         .delete-btn { background-color: #dc3545; color: white; border: none; padding: 5px 10px; border-radius: 4px; cursor: pointer; }
         .file-selection-info { margin-bottom: 10px; padding: 8px; background-color: #f8f9fa; border-radius: 4px; font-size: 13px; color: #666; }
 
         .upload-button-area { text-align: right; }
-        #addFileBtn { padding: 10px 20px; background-color: #007bff; color: white; border: none; border-radius: 8px; cursor: pointer; }
+        #addFileBtn { padding: 10px 20px; background-color: #003b83; color: white; border: none; border-radius: 8px; cursor: pointer; }
 
         /* 모달 (팝업) 스타일 */
         .modal { display: none; position: fixed; z-index: 1; left: 0; top: 0; width: 100%; height: 100%; background-color: rgba(0,0,0,0.5); }
         .modal-content { background-color: #fff; margin: 15% auto; padding: 30px; border: 1px solid #888; width: 400px; border-radius: 10px; box-shadow: 0 5px 15px rgba(0,0,0,0.3); }
         .close { color: #aaa; float: right; font-size: 28px; font-weight: bold; cursor: pointer; }
         .close:hover, .close:focus { color: #333; text-decoration: none; }
-        #uploadForm button { width: 100%; padding: 10px; margin-top: 15px; background-color: #28a745; color: white; border: none; border-radius: 5px; cursor: pointer; }
+        /* 업로드 시작 / 양식 다운로드 버튼: 동일한 노란색 스타일 */
+        #uploadForm button[type="submit"],
+        #downloadFormatBtn {
+            width: 100%;
+            padding: 10px;
+            margin-top: 15px;
+            background-color: #f8b616; /* 기본은 노란색 */
+            color: #000;               /* 글자색 검정 */
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 13px;
+        }
+
+        #uploadForm button[type="submit"]:hover,
+        #downloadFormatBtn:hover {
+            background-color: #d0d0d0; /* hover 시 회색으로 전환 */
+        }
+
+        /* 매뉴얼 작성 가이드 버튼 */
+        #guideBtn {
+            width: 100%;
+            padding: 10px;
+            margin-top: 10px;
+            background-color: #fff;
+            color: #003b83;
+            border: 1px solid #003b83;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 13px;
+        }
+        #guideBtn:hover { background-color: #eef2ff; }
+
+        /* 가이드 모달 */
+        #guideModal .modal-content {
+            width: 620px;
+            margin: 5% auto;
+            max-height: 85vh;
+            overflow-y: auto;
+        }
+        .guide-section { margin-bottom: 18px; }
+        .guide-section h4 { margin: 0 0 8px 0; color: #003b83; font-size: 14px; }
+        .guide-desc { font-size: 13px; color: #444; line-height: 1.7; background: #f8f9fa; border-radius: 6px; padding: 12px 14px; }
+        .guide-desc code { background: #e8edf7; border-radius: 3px; padding: 1px 5px; font-family: monospace; font-size: 12px; }
+        .prompt-box {
+            width: 100%;
+            box-sizing: border-box;
+            height: 280px;
+            padding: 12px;
+            border: 1px solid #ccc;
+            border-radius: 6px;
+            font-size: 12px;
+            font-family: monospace;
+            line-height: 1.6;
+            color: #333;
+            resize: vertical;
+            background: #fafafa;
+        }
+        #copyPromptBtn {
+            width: 100%;
+            padding: 10px;
+            margin-top: 10px;
+            background-color: #003b83;
+            color: #fff;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 13px;
+            font-weight: 600;
+        }
+        #copyPromptBtn:hover { background-color: #002a5e; }
+        #copyPromptBtn.copied { background-color: #2e7d32; }
     </style>
+    <script th:src="@{/js/marked.min.js}"></script>
 </head>
 <body>
 <div class="container">
     <!-- 왼쪽 절반: AI 채팅 -->
-<div class="pane left-pane">
-    <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 10px;">
-        <h2 style="display: flex; align-items: center; justify-content: center; gap: 10px; margin: -10px 0 0 0; flex: 1;">
-            <img src="/images/cwmAi.png" alt="AI" style="width: 160px; height: 55px; border-radius: 0%; object-fit: cover; margin: 0; vertical-align: middle;" onerror="this.style.display='none';">
-        </h2>
-        <button id="logoutBtn" style="background: none; border: none; cursor: pointer; padding: 0; transition: all 0.3s ease; margin-top: -5px;" onmouseover="this.style.transform='translateY(-2px)'; this.style.opacity='0.8';" onmouseout="this.style.transform='translateY(0)'; this.style.opacity='1';">
-            <img src="/images/logout.png" alt="로그아웃" style="width: 30px; height: 30px; object-fit: contain;" onerror="this.style.display='none';">
-        </button>
-    </div>
-    <!-- 카테고리 선택 -->
-    <div style="margin-bottom: 10px; display: flex; gap: 10px; align-items: center; justify-content: space-between;">
-        <div style="display: flex; gap: 10px; align-items: center; flex: 1;">
-            <label for="categorySelect" style="margin: 0; font-weight: bold; color: #555;">분야 선택: </label>
-            <select id="categorySelect" style="padding: 8px; border: 1px solid #ccc; border-radius: 8px; min-width: 200px; font-size: 14px; flex: 1;"></select>
+    <div class="pane left-pane">
+        <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 10px;">
+            <h2 style="display: flex; align-items: center; justify-content: center; gap: 10px; margin: -10px 0 0 0; flex: 1;">
+                <img src="/images/cwmAi.png" alt="AI" style="width: 160px; height: 55px; border-radius: 0%; object-fit: cover; margin: 0; vertical-align: middle;" onerror="this.style.display='none';">
+            </h2>
+            <button id="logoutBtn" style="background: none; border: none; cursor: pointer; padding: 0; transition: all 0.3s ease; margin-top: -5px;" onmouseover="this.style.transform='translateY(-2px)'; this.style.opacity='0.8';" onmouseout="this.style.transform='translateY(0)'; this.style.opacity='1';">
+                <img src="/images/logout.png" alt="로그아웃" style="width: 30px; height: 30px; object-fit: contain;" onerror="this.style.display='none';">
+            </button>
         </div>
-        <button id="addCategoryBtn" style="padding: 8px 16px; background-color: #6c757d; color: #fff; border: none; border-radius: 8px; cursor: pointer; font-size: 14px; white-space: nowrap; display: none;">분야 추가</button>
+        <!-- 카테고리 선택 -->
+        <div style="margin-bottom: 10px; display: flex; gap: 10px; align-items: center; justify-content: space-between;">
+            <div style="display: flex; gap: 10px; align-items: center; flex: 1;">
+                <label for="categorySelect" style="margin: 0; font-weight: bold; color: #555;">분야 선택: </label>
+                <select id="categorySelect" style="padding: 8px; border: 1px solid #ccc; border-radius: 8px; min-width: 200px; font-size: 14px; flex: 1;"></select>
+            </div>
+            <button id="addCategoryBtn" style="padding: 8px 16px; background-color: #2b485f; color: #fff; border: none; border-radius: 8px; cursor: pointer; font-size: 14px; white-space: nowrap; display: none;">분야 추가</button>
+        </div>
+        <!-- 여기에 ai-response 클래스 추가 -->
+        <div id="chatBox" class="ai-response"></div>
+        <div class="chat-input-area">
+            <input type="text" id="userInput" placeholder="메시지 입력">
+            <button id="sendBtn">전송</button>
+        </div>
     </div>
-    <!-- 여기에 ai-response 클래스 추가 -->
-    <div id="chatBox" class="ai-response"></div>
-    <div class="chat-input-area">
-        <input type="text" id="userInput" placeholder="메시지 입력">
-        <button id="sendBtn">전송</button>
-    </div>
-</div>
 
     <!-- 오른쪽 절반: 파일 목록 및 업로드 버튼 -->
     <div class="pane right-pane" id="rightPane">
@@ -177,7 +372,7 @@
         </div>
         <div class="file-list-container">
             <h3>업로드된 파일</h3>
-            <div class="file-selection-info" id="fileSelectionInfo">선택된 파일: 0개 (최소 1개, 최대 5개)</div>
+            <div class="file-selection-info" id="fileSelectionInfo">💡 파일을 선택하면 더 빠르고 정확한 답변을 받을 수 있어요!</div>
             <ul id="fileList"></ul>
         </div>
         <div class="upload-button-area" id="uploadButtonArea" style="display: none;">
@@ -198,7 +393,82 @@
             <br/><br/>
             <input type="file" id="fileInput" name="file" required />
             <button type="submit">업로드 시작</button>
+            <button type="button" id="downloadFormatBtn">양식 다운로드</button>
+            <button type="button" id="guideBtn" onclick="openGuideModal()">매뉴얼 작성 가이드 보기</button>
         </form>
+    </div>
+</div>
+
+<!-- 매뉴얼 작성 가이드 모달 -->
+<div id="guideModal" class="modal">
+    <div class="modal-content">
+        <span class="close" onclick="closeGuideModal()">&times;</span>
+        <h3 style="margin-top: 0; color: #003b83;">매뉴얼 작성 가이드</h3>
+
+        <div class="guide-section">
+            <h4>파일 유형 자동 판별</h4>
+            <div class="guide-desc">
+                파일명에 <code>법</code>, <code>규정</code>, <code>지침</code>, <code>시행령</code>, <code>시행규칙</code>, <code>법률</code> 단어가 포함되면 <strong>법령 문서</strong>로 인식됩니다.
+                그 외 파일은 모두 <strong>업무 매뉴얼</strong>로 인식되므로, 매뉴얼 파일명에 위 단어를 포함하지 마세요.
+            </div>
+        </div>
+
+        <div class="guide-section">
+            <h4>업무 매뉴얼 구조 규칙</h4>
+            <div class="guide-desc">
+                목차 번호(<code>1.</code> / <code>01</code> / <code>I.</code>)는 줄 맨 앞에 위치해야 하며,
+                번호 뒤에는 <strong>업무명</strong>을 작성하세요.<br>
+                해당 업무에 관한 절차, 기한, 유의사항 등 모든 내용을 그 섹션 안에 함께 작성해야
+                AI가 "어떤 업무의 내용인지" 파악할 수 있습니다.<br><br>
+                - 특수 기호 <code>①②③</code>, <code>◆</code>, <code>▶</code> 등은 PDF 변환 시 깨질 수 있으니
+                <code>(1) (2) (3)</code> 또는 <code>-</code> 를 사용하세요.<br>
+                - 섹션당 권장 분량: <strong>200~800자</strong>
+            </div>
+        </div>
+
+        <div class="guide-section" style="background:#eef7ee; border-radius:6px; padding:10px 14px; font-size:13px; color:#2e7d32;">
+            실제 작성 예시 파일은 이전 화면의 <strong>양식 다운로드</strong> 버튼에서 확인할 수 있습니다.
+        </div>
+
+        <div class="guide-section">
+            <h4>타 AI(ChatGPT 등)에 붙여넣기용 프롬프트</h4>
+            <textarea id="guidePromptText" class="prompt-box" readonly>아래 [업무 내용]을 읽고, 우리 내부 AI 시스템에 업로드할 업무 매뉴얼 형식으로 정리해 주세요.
+
+[작성 규칙]
+1. 목차 번호(1. / 2. / 01 / 02 형식)는 반드시 줄 맨 앞에 위치하고,
+   번호 뒤에는 "업무명"을 작성하세요.
+   - 예: "1. 연차 신청", "2. 출장비 정산", "3. 경조사비 지급"
+   - 신청 절차, 유의사항 같은 하위 내용을 번호로 쪼개지 마세요.
+
+2. 각 업무 섹션 안에 그 업무에 관한 모든 내용을 포함하세요.
+   - 업무 개요, 신청 절차, 처리 기한, 관련 서식, 유의사항을
+     하나의 섹션 안에 서술하세요.
+   - 섹션당 200~800자 분량을 권장합니다.
+
+3. 단계를 나열할 때는 특수 기호 대신 (1) (2) (3) 형식을 사용하세요.
+   - ①②③, ◆, ▶, ▷ 등 특수 기호는 시스템에서 읽히지 않을 수 있습니다.
+   - 글머리는 "-" 또는 "*"를 사용하세요.
+- 원본 문서가 담고 있는 것들은 조금의 누락도 없이 전부 읽어주세요.(빠진 내용 X)
+[출력 예시]
+1. 연차 신청
+연차는 사용 예정일 3일 전까지 시스템에서 신청해야 한다.
+신청 절차: (1) 시스템 로그인 → (2) 연차 신청서 작성 → (3) 팀장 결재
+처리 기한: 신청 후 2영업일 이내 승인 완료.
+유의사항
+- 마감일 초과 시 다음 달로 이월된다.
+- 반차는 오전/오후 구분하여 신청한다.
+
+2. 출장비 정산
+출장 완료 후 5영업일 이내 정산 신청을 완료해야 한다.
+신청 절차: (1) 영수증 원본 수집 → (2) 정산서 작성 → (3) 경리팀 이메일 제출
+유의사항
+- 식비는 1인 1만 원 한도이며 초과분은 본인 부담이다.
+- 증빙서류 미제출 시 정산이 거절된다.
+
+[업무 내용]
+(여기에 정리할 원본 내용을 붙여넣으세요)</textarea>
+            <button id="copyPromptBtn" onclick="copyGuidePrompt()">복사하기</button>
+        </div>
     </div>
 </div>
 
@@ -209,9 +479,9 @@
         <h3>분야 추가</h3>
         <form id="categoryForm">
             <label for="newCategoryInput">새 분야 명: </label>
-            <input type="text" id="newCategoryInput" placeholder="분야명을 입력하세요" required 
+            <input type="text" id="newCategoryInput" placeholder="분야명을 입력하세요" required
                    style="width: 100%; padding: 8px; margin-top: 10px; border: 1px solid #ccc; border-radius: 8px; box-sizing: border-box;">
-            <button type="submit" style="width: 100%; padding: 10px; margin-top: 15px; background-color: #28a745; color: white; border: none; border-radius: 5px; cursor: pointer;">추가하기</button>
+            <button type="submit" style="width: 100%; padding: 10px; margin-top: 15px; background-color: #f8b616; color: #003b83; border: none; border-radius: 5px; font-weight: 700; cursor: pointer;">추가하기</button>
         </form>
     </div>
 </div>
@@ -229,166 +499,268 @@
     const categoryForm = document.getElementById('categoryForm');
     const defaultCategories = ["계약", "개인정보보호", "정보보안", "정보화사업", "공제사업"];
 
-        // 엔터 키 입력 감지 이벤트 리스너 추가
+    // 엔터 키 입력 감지 이벤트 리스너 추가
     userInput.addEventListener('keypress', (e) => {
         if (e.key === 'Enter' && !sendBtn.disabled) {
             sendBtn.click(); // Enter 키 입력 시 전송 버튼 클릭 이벤트 실행
         }
     });
 
-    // 점 애니메이션 함수
+    // 점 애니메이션 함수 (baseText: 문자열 또는 { base: string } — 객체면 매 틱마다 base 읽어서 % 뒤에도 ... 표시 가능)
     function startDotAnimation(element, baseText) {
         let dotCount = 0;
         const interval = setInterval(() => {
             dotCount = (dotCount % 3) + 1;
             const dots = '.'.repeat(dotCount);
-            element.textContent = baseText + dots;
+            const base = (baseText && typeof baseText === 'object' && 'base' in baseText) ? baseText.base : baseText;
+            element.textContent = base + dots;
         }, 500);
         return interval; // interval ID 반환하여 나중에 clearInterval 할 수 있게 함
     }
 
+    // ── AI 메시지 말풍선 DOM 생성 헬퍼 ──────────────────────────────
+    function createAiMessageDiv() {
+        const messageDiv = document.createElement('div');
+        messageDiv.classList.add('message', 'ai');
+        const avatar = document.createElement('img');
+        avatar.src = '/images/Cw_ci.png';
+        avatar.alt = 'AI';
+        avatar.classList.add('ai-avatar');
+        avatar.onerror = function() { this.style.display = 'none'; };
+        const content = document.createElement('div');
+        content.classList.add('message-content');
+        const textSpan = document.createElement('span');
+        content.appendChild(textSpan);
+        messageDiv.appendChild(avatar);
+        messageDiv.appendChild(content);
+        return { messageDiv, textSpan };
+    }
+
+    // ── O/X 피드백 버튼 렌더링 ──────────────────────────────────────
+    // pendingKey: 서버에서 받은 임시 캐시 키
+    function renderFeedbackButtons(pendingKey) {
+        const feedbackArea = document.createElement('div');
+        feedbackArea.classList.add('feedback-area');
+
+        const label = document.createElement('span');
+        label.classList.add('feedback-label');
+        label.textContent = '이 답변이 도움이 됐나요?';
+
+        const okBtn = document.createElement('button');
+        okBtn.classList.add('feedback-btn', 'ok');
+        okBtn.textContent = '✓ 맞아요';
+
+        const ngBtn = document.createElement('button');
+        ngBtn.classList.add('feedback-btn', 'ng');
+        ngBtn.textContent = '✗ 틀렸어요';
+
+        const resultText = document.createElement('span');
+        resultText.classList.add('feedback-result');
+
+        okBtn.addEventListener('click', async () => {
+            okBtn.disabled = true;
+            ngBtn.disabled = true;
+            await fetch(`/lm/api/feedback?pendingKey=${encodeURIComponent(pendingKey)}&approved=true`, { method: 'POST' });
+            okBtn.style.display = 'none';
+            ngBtn.style.display = 'none';
+            resultText.textContent = '✓ 저장되었습니다.';
+        });
+
+        ngBtn.addEventListener('click', async () => {
+            okBtn.disabled = true;
+            ngBtn.disabled = true;
+            await fetch(`/lm/api/feedback?pendingKey=${encodeURIComponent(pendingKey)}&approved=false`, { method: 'POST' });
+            okBtn.style.display = 'none';
+            ngBtn.style.display = 'none';
+            resultText.textContent = '저장되지 않았습니다. 필요하면 다시 질문해 주세요.';
+        });
+
+        feedbackArea.appendChild(label);
+        feedbackArea.appendChild(okBtn);
+        feedbackArea.appendChild(ngBtn);
+        feedbackArea.appendChild(resultText);
+        return feedbackArea;
+    }
+
+    // ── HTTP 에러 체크 헬퍼 ─────────────────────────────────────────
+    function checkResponse(res) {
+        if (res.status === 401) {
+            alert('로그인 세션이 만료되었습니다.\n다시 로그인해주세요.');
+            window.location.href = '/loginPage';
+            throw new Error('SESSION_EXPIRED');
+        }
+        if (!res.ok) {
+            throw new Error(`HTTP_${res.status}`);
+        }
+        return res;
+    }
+
+    // ── 메인 질문 처리 함수 (재귀 재생성 지원) ──────────────────────
+    async function processQuestion(question, category, selectedFilesArray, loadingDiv, loadingText, animationIntervalRef) {
+
+        // 1단계: 관련 조항 추천
+        const stage1Body = { files: selectedFilesArray };
+        console.group('[DEBUG] Stage1 요청');
+        console.log('질문:', question);
+        console.log('카테고리:', category);
+        console.log('선택 파일:', selectedFilesArray.length > 0 ? selectedFilesArray : '없음 (전체 검색)');
+        console.groupEnd();
+
+        const stage1Res = await fetch(
+            `/lm/api/ask/stage1?question=${encodeURIComponent(question)}&category=${encodeURIComponent(category)}`,
+            {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(stage1Body)
+            }
+        );
+        checkResponse(stage1Res);
+        const recommendedTitles = await stage1Res.json();
+        console.log('[DEBUG] Stage1 결과 (LLM1이 선택한 조항):', recommendedTitles);
+
+        if (!recommendedTitles || recommendedTitles.length === 0) {
+            clearInterval(animationIntervalRef.id);
+            chatBox.removeChild(loadingDiv);
+            const { messageDiv, textSpan } = createAiMessageDiv();
+            textSpan.textContent = '해당 분야의 관련 조항을 찾을 수 없습니다. 보다 정확한 법률 용어로 다시 질문해주세요.';
+            chatBox.appendChild(messageDiv);
+            chatBox.scrollTop = chatBox.scrollHeight;
+            sendBtn.disabled = false;
+            return;
+        }
+
+        // 2단계: 최종 답변 생성
+        clearInterval(animationIntervalRef.id);
+        loadingText.textContent = '조항검색 완료! 답변을 생성중입니다';
+        animationIntervalRef.id = startDotAnimation(loadingText, '조항검색 완료! 답변을 생성중입니다');
+        chatBox.scrollTop = chatBox.scrollHeight;
+
+        const stage2Res = await fetch(
+            `/lm/api/ask/stage2?question=${encodeURIComponent(question)}&category=${encodeURIComponent(category)}`,
+            {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(recommendedTitles)
+            }
+        );
+        checkResponse(stage2Res);
+
+        // stage2 응답은 이제 JSON { answer, pendingKey }
+        const stage2Result = await stage2Res.json();
+        const answer = stage2Result.answer;
+        const pendingKey = stage2Result.pendingKey;
+
+        clearInterval(animationIntervalRef.id);
+        chatBox.removeChild(loadingDiv);
+
+        const { messageDiv, textSpan } = createAiMessageDiv();
+        chatBox.appendChild(messageDiv);
+
+        renderAnswerMessage(textSpan, answer, () => {
+            // 타이핑 완료 후 O/X 피드백 버튼 표시
+            if (pendingKey) {
+                const feedbackArea = renderFeedbackButtons(pendingKey);
+                // 예전처럼 답변 "아래"에 별도 블록으로 붙이되,
+                // 각 답변마다 하나씩 생성되므로 이후 질문을 해도 이전 답변에 대한 선택은 유지됨
+                chatBox.appendChild(feedbackArea);
+            }
+            sendBtn.disabled = false;
+            userInput.focus();
+            chatBox.scrollTop = chatBox.scrollHeight;
+        });
+    }
+
     sendBtn.addEventListener('click', async () => {
         const question = userInput.value.trim();
-        if(!question || sendBtn.disabled) return;
-        
-        // 전송 버튼만 비활성화 (회색으로 표시)
-        sendBtn.disabled = true;
+        if (!question || sendBtn.disabled) return;
 
-        // UI/UX 개선: 말풍선 스타일 적용
-        chatBox.innerHTML += `<div class="message user">나: ${question}</div>`;
+        sendBtn.disabled = true;
+        // innerHTML을 직접 건드리면 기존 노드에 걸려 있던 이벤트 리스너가 모두 날아가므로,
+        // DOM 노드를 생성해서 appendChild로 추가한다.
+        const userMessageDiv = document.createElement('div');
+        userMessageDiv.classList.add('message', 'user');
+        userMessageDiv.textContent = `나: ${question}`;
+        chatBox.appendChild(userMessageDiv);
         userInput.value = '';
         chatBox.scrollTop = chatBox.scrollHeight;
 
         const loadingDiv = document.createElement('div');
         loadingDiv.classList.add('message', 'ai', 'loading');
-        const avatarImg = document.createElement('img');
-        avatarImg.src = '/images/Cw_ci.png';
-        avatarImg.alt = 'AI';
-        avatarImg.classList.add('ai-avatar');
-        avatarImg.onerror = function() { this.style.display = 'none'; };
-        const contentDiv = document.createElement('div');
-        contentDiv.classList.add('message-content');
+        const { messageDiv: _, textSpan: __ } = createAiMessageDiv(); // 구조만 참고
+        const loadingAvatar = document.createElement('img');
+        loadingAvatar.src = '/images/Cw_ci.png';
+        loadingAvatar.alt = 'AI';
+        loadingAvatar.classList.add('ai-avatar');
+        loadingAvatar.onerror = function() { this.style.display = 'none'; };
+        const loadingContent = document.createElement('div');
+        loadingContent.classList.add('message-content');
         const loadingText = document.createElement('span');
         loadingText.textContent = '관련조항을 검색중입니다';
-        contentDiv.appendChild(loadingText);
-        loadingDiv.appendChild(avatarImg);
-        loadingDiv.appendChild(contentDiv);
+        loadingContent.appendChild(loadingText);
+        loadingDiv.appendChild(loadingAvatar);
+        loadingDiv.appendChild(loadingContent);
         chatBox.appendChild(loadingDiv);
         chatBox.scrollTop = chatBox.scrollHeight;
 
-        // 1단계 점 애니메이션 시작
-        let animationInterval = startDotAnimation(loadingText, '관련조항을 검색중입니다');
+        const animationIntervalRef = { id: startDotAnimation(loadingText, '관련조항을 검색중입니다') };
 
         try {
             const category = categorySelect.value;
-            
-            // 선택된 파일 목록 확인
-            if (selectedFiles.size === 0) {
-                alert('최소 1개의 파일을 선택해주세요.');
-                // 파일 선택 오류 시에도 전송 버튼 활성화
-                sendBtn.disabled = false;
-                return;
-            }
-            
-            // 선택된 파일 목록을 배열로 변환
-            const selectedFilesArray = Array.from(selectedFiles);
-            
-            // 1단계: 관련 조항 추천
-            const stage1Res = await fetch(
-                `/lm/api/ask/stage1?question=${encodeURIComponent(question)}&category=${encodeURIComponent(category)}`,
-                { 
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({ files: selectedFilesArray })
-                }
-            );
-            if (!stage1Res.ok) throw new Error(`HTTP error! status: ${stage1Res.status}`);
-            
-            const recommendedTitles = await stage1Res.json();
-            
-            if (!recommendedTitles || recommendedTitles.length === 0) {
-                clearInterval(animationInterval);
-                chatBox.removeChild(loadingDiv);
-                const errorDiv = document.createElement('div');
-                errorDiv.classList.add('message', 'ai');
-                const avatarImg = document.createElement('img');
-                avatarImg.src = '/images/Cw_ci.png';
-                avatarImg.alt = 'AI';
-                avatarImg.classList.add('ai-avatar');
-                avatarImg.onerror = function() { this.style.display = 'none'; };
-                const contentDiv = document.createElement('div');
-                contentDiv.classList.add('message-content');
-                contentDiv.textContent = '해당 분야의 관련 조항을 찾을 수 없습니다. 보다 정확한 법률 용어로 다시 질문해주세요.';
-                errorDiv.appendChild(avatarImg);
-                errorDiv.appendChild(contentDiv);
-                chatBox.appendChild(errorDiv);
-                chatBox.scrollTop = chatBox.scrollHeight;
-                // 에러 발생 시에도 전송 버튼 활성화
-                sendBtn.disabled = false;
-                return;
-            }
-            
-            // 2단계: 최종 답변 생성
-            clearInterval(animationInterval);
-            loadingText.textContent = '조항검색 완료! 답변을 생성중입니다';
-            animationInterval = startDotAnimation(loadingText, '조항검색 완료! 답변을 생성중입니다');
-            chatBox.scrollTop = chatBox.scrollHeight;
-            
-            const stage2Res = await fetch(
-                `/lm/api/ask/stage2?question=${encodeURIComponent(question)}&category=${encodeURIComponent(category)}`,
-                { 
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify(recommendedTitles)
-                }
-            );
-            if (!stage2Res.ok) throw new Error(`HTTP error! status: ${stage2Res.status}`);
 
-            const answer = await stage2Res.text();
-            clearInterval(animationInterval);
-            chatBox.removeChild(loadingDiv);
-            const messageDiv = document.createElement('div');
-            messageDiv.classList.add('message', 'ai');
-            const avatarImg = document.createElement('img');
-            avatarImg.src = '/images/Cw_ci.png';
-            avatarImg.alt = 'AI';
-            avatarImg.classList.add('ai-avatar');
-            avatarImg.onerror = function() { this.style.display = 'none'; };
-            const contentDiv = document.createElement('div');
-            contentDiv.classList.add('message-content');
-            const textSpan = document.createElement('span');
-            contentDiv.appendChild(textSpan);
-            messageDiv.appendChild(avatarImg);
-            messageDiv.appendChild(contentDiv);
-            chatBox.appendChild(messageDiv);
-            typeMessage(textSpan, ': ' + answer, () => {
-                // 답변 완료 후 전송 버튼 활성화
+            // selectedFiles가 비어있으면 전체 파일 검색 (files=[] → 백엔드에서 필터 없이 전체 청크 검색)
+            const selectedFilesArray = Array.from(selectedFiles);
+
+            // 0단계: 캐시 확인
+            const cacheRes = await fetch(
+                `/lm/api/ask/cache-check?question=${encodeURIComponent(question)}&category=${encodeURIComponent(category)}`,
+                { method: 'POST' }
+            );
+            checkResponse(cacheRes);
+            const cacheResult = await cacheRes.json();
+
+            if (cacheResult.cached === true) {
+                // 캐시 히트 → 즉시 표시 (이미 검증된 답변이므로 O/X 버튼 없음)
+                clearInterval(animationIntervalRef.id);
+                chatBox.removeChild(loadingDiv);
+                const { messageDiv, textSpan } = createAiMessageDiv();
+                chatBox.appendChild(messageDiv);
+                renderAnswerMessage(textSpan, cacheResult.answer, () => {
+                    sendBtn.disabled = false;
+                    userInput.focus();
+                });
+                chatBox.scrollTop = chatBox.scrollHeight;
+                return;
+            }
+            if (cacheResult.initializing === true) {
+                // 문서 초기화 중 → stage1 호출 없이 안내 메시지만 표시
+                clearInterval(animationIntervalRef.id);
+                chatBox.removeChild(loadingDiv);
+                const { messageDiv, textSpan } = createAiMessageDiv();
+                textSpan.textContent = '문서를 초기화중입니다. 잠시만 기다려주세요.';
+                chatBox.appendChild(messageDiv);
+                chatBox.scrollTop = chatBox.scrollHeight;
                 sendBtn.disabled = false;
-                userInput.focus();
-            });
+                return;
+            }
+
+            // 캐시 미스 → stage1 → stage2 + O/X 피드백
+            await processQuestion(question, category, selectedFilesArray, loadingDiv, loadingText, animationIntervalRef);
 
         } catch (error) {
-            clearInterval(animationInterval);
-            chatBox.removeChild(loadingDiv);
-            const errorDiv = document.createElement('div');
-            errorDiv.classList.add('message', 'ai');
-            errorDiv.style.color = 'red';
-            const avatarImg = document.createElement('img');
-            avatarImg.src = '/images/Cw_ci.png';
-            avatarImg.alt = 'AI';
-            avatarImg.classList.add('ai-avatar');
-            avatarImg.onerror = function() { this.style.display = 'none'; };
-            const contentDiv = document.createElement('div');
-            contentDiv.classList.add('message-content');
-            contentDiv.textContent = `오류: ${error.message}. 서버 콘솔을 확인하세요.`;
-            errorDiv.appendChild(avatarImg);
-            errorDiv.appendChild(contentDiv);
-            chatBox.appendChild(errorDiv);
-            // 에러 발생 시에도 전송 버튼 활성화
+            if (error.message === 'SESSION_EXPIRED') return; // alert+redirect 이미 처리됨
+            clearInterval(animationIntervalRef.id);
+            if (loadingDiv.parentNode) chatBox.removeChild(loadingDiv);
+            const { messageDiv, textSpan } = createAiMessageDiv();
+            messageDiv.style.color = 'red';
+            const msg = error.message || '';
+            if (msg.includes('HTTP_500') || msg.includes('HTTP_502') || msg.includes('HTTP_503')) {
+                textSpan.textContent = 'AI 서버에 일시적인 오류가 발생했습니다. 잠시 후 다시 시도해주세요.';
+            } else if (msg.includes('HTTP_')) {
+                textSpan.textContent = '요청 처리 중 오류가 발생했습니다. 페이지를 새로고침 후 다시 시도해주세요.';
+            } else {
+                textSpan.textContent = '네트워크 연결을 확인하고 다시 시도해주세요.';
+            }
+            chatBox.appendChild(messageDiv);
             sendBtn.disabled = false;
         }
         chatBox.scrollTop = chatBox.scrollHeight;
@@ -401,12 +773,67 @@
     const fileInput = document.getElementById('fileInput');
     const uploadModal = document.getElementById('uploadModal');
     const fileSelectionInfo = document.getElementById('fileSelectionInfo');
-    
+    const downloadFormatBtn = document.getElementById('downloadFormatBtn');
+
     // 선택된 파일 목록 관리
     let selectedFiles = new Set();
 
     function openUploadModal() { uploadModal.style.display = 'block'; }
     function closeUploadModal() { uploadModal.style.display = 'none'; fileInput.value = ''; }
+
+    const guideModal = document.getElementById('guideModal');
+    function openGuideModal() { guideModal.style.display = 'block'; }
+    function closeGuideModal() { guideModal.style.display = 'none'; }
+
+    function copyGuidePrompt() {
+        const text = document.getElementById('guidePromptText').value;
+        navigator.clipboard.writeText(text).then(() => {
+            const btn = document.getElementById('copyPromptBtn');
+            btn.textContent = '복사 완료!';
+            btn.classList.add('copied');
+            setTimeout(() => {
+                btn.textContent = '복사하기';
+                btn.classList.remove('copied');
+            }, 2000);
+        });
+    }
+
+    // 가이드 모달 외부 클릭 시 닫기
+    guideModal.addEventListener('click', (e) => {
+        if (e.target === guideModal) closeGuideModal();
+    });
+
+    // 업로드용 양식 다운로드 (format 카테고리에 있는 모든 파일을 한 번에 다운로드 시도)
+    async function downloadFormatFiles() {
+        try {
+            const res = await fetch('/api/files?category=' + encodeURIComponent('format'));
+            if (!res.ok) {
+                alert('양식 목록을 불러오지 못했습니다.');
+                return;
+            }
+            const files = await res.json();
+            if (!files || files.length === 0) {
+                alert('등록된 양식 파일이 없습니다.');
+                return;
+            }
+
+            // 각 파일에 대해 /files/download 호출 (브라우저가 여러 파일 다운로드를 허용해야 함)
+            files.forEach(filename => {
+                const a = document.createElement('a');
+                a.href = `/files/download?filename=${encodeURIComponent(filename)}&category=${encodeURIComponent('format')}`;
+                a.download = filename;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+            });
+        } catch (e) {
+            alert('양식 다운로드 중 오류가 발생했습니다: ' + e.message);
+        }
+    }
+
+    if (downloadFormatBtn) {
+        downloadFormatBtn.addEventListener('click', downloadFormatFiles);
+    }
 
     // 분야 옵션 초기화
     function setCategoryOptions(categories) {
@@ -450,7 +877,7 @@
         newCategoryInput.value = '';
         newCategoryInput.focus();
     }
-    
+
     function closeCategoryModal() {
         categoryModal.style.display = 'none';
         newCategoryInput.value = '';
@@ -462,7 +889,7 @@
             alert('권한이 없습니다. 관리자만 분야를 추가할 수 있습니다.');
             return;
         }
-        
+
         const trimmed = category.trim();
         if (!trimmed) {
             alert('분야명을 입력해주세요.');
@@ -473,14 +900,14 @@
             // 서버에 분야 추가 요청 (디렉토리 생성)
             const formData = new FormData();
             formData.append('category', trimmed);
-            
+
             const response = await fetch('/api/categories/add', {
                 method: 'POST',
                 body: formData
             });
-            
+
             const result = await response.text();
-            
+
             if (result === 'success') {
                 // 성공 시 select에 추가
                 const targets = [categorySelect, uploadCategorySelect];
@@ -507,13 +934,13 @@
 
     // 분야 추가 버튼 클릭 시 모달 열기
     addCategoryBtn.addEventListener('click', openCategoryModal);
-    
+
     // 분야 추가 폼 제출 처리
     categoryForm.addEventListener('submit', (e) => {
         e.preventDefault();
         addCategory(newCategoryInput.value);
     });
-    
+
     // 모달 외부 클릭 시 닫기
     window.addEventListener('click', (e) => {
         if (e.target === categoryModal) {
@@ -529,6 +956,24 @@
             if (!response.ok) throw new Error('파일 목록을 불러오지 못했습니다.');
             const files = await response.json();
             renderFiles(files);
+
+            // [DEBUG] 카테고리 내 전체 청크 목록 출력
+            fetch(`/lm/api/debug/chunks?category=${encodeURIComponent(currentCategory)}`)
+                .then(r => r.json())
+                .then(chunks => {
+                    console.group(`[DEBUG] 카테고리: ${currentCategory} | 총 ${chunks.length}개 청크`);
+                    const byFile = {};
+                    chunks.forEach(c => {
+                        if (!byFile[c.file]) byFile[c.file] = [];
+                        byFile[c.file].push(`[${c.type}] ${c.article} ${c.title}`);
+                    });
+                    Object.entries(byFile).forEach(([file, titles]) => {
+                        console.group(`📄 ${file} (${titles.length}개)`);
+                        titles.forEach(t => console.log(t));
+                        console.groupEnd();
+                    });
+                    console.groupEnd();
+                });
         } catch (error) {
             console.error(error);
         }
@@ -537,23 +982,19 @@
     function renderFiles(files) {
         fileList.innerHTML = '';
         const currentCategory = categorySelect.value;
-        
-        // 분야가 변경되면 선택된 파일 초기화
+
+        // 분야가 변경되면 선택된 파일 초기화 (기본: 전체 검색)
         selectedFiles.clear();
-        
-        // 최초 로드 시 상위 3개 자동 선택
-        const filesToSelect = files.slice(0, Math.min(3, files.length));
-        filesToSelect.forEach(file => selectedFiles.add(file));
-        
+
         files.forEach((file, index) => {
             const li = document.createElement('li');
             li.classList.add('file-item');
             // 파일명에서 확장자 제거 (마지막 . 이후 부분 제거)
             const fileNameWithoutExtension = file.lastIndexOf('.') > 0 ? file.substring(0, file.lastIndexOf('.')) : file;
             const isChecked = selectedFiles.has(file);
-            
-            const deleteButton = (typeof isAdmin !== 'undefined' && isAdmin) 
-                ? `<button class="delete-btn" onclick="deleteFile('${file}')">삭제</button>` 
+
+            const deleteButton = (typeof isAdmin !== 'undefined' && isAdmin)
+                ? `<button class="delete-btn" onclick="deleteFile('${file}')">삭제</button>`
                 : '';
             li.innerHTML = `
                 <div class="file-item-content">
@@ -564,45 +1005,33 @@
             `;
             fileList.appendChild(li);
         });
-        
+
         updateFileSelectionInfo();
     }
-    
+
     // 파일 선택 처리 함수
     function handleFileSelection(filename) {
         const checkbox = document.querySelector(`input[data-filename="${filename}"]`);
-        
+
         if (checkbox.checked) {
-            // 최대 5개 제한
-            if (selectedFiles.size >= 5) {
-                checkbox.checked = false;
-                alert('최대 5개까지만 선택할 수 있습니다.');
-                return;
-            }
             selectedFiles.add(filename);
         } else {
-            // 최소 1개 제한
-            if (selectedFiles.size <= 1) {
-                checkbox.checked = true;
-                alert('최소 1개는 선택해야 합니다.');
-                return;
-            }
+            // 선택 해제: 0개가 되면 "전체 파일 검색" 모드로 동작하도록 허용
             selectedFiles.delete(filename);
         }
-        
+
         updateFileSelectionInfo();
     }
-    
+
     // 파일 선택 정보 업데이트
     function updateFileSelectionInfo() {
         const count = selectedFiles.size;
-        fileSelectionInfo.textContent = `선택된 파일: ${count}개 (최소 1개, 최대 5개)`;
         if (count === 0) {
-            fileSelectionInfo.style.color = '#dc3545';
-        } else if (count === 5) {
-            fileSelectionInfo.style.color = '#ffc107';
+            fileSelectionInfo.textContent = '💡 파일을 선택하지 않으면 현재 분야의 전체 파일을 참고해 답변드려요.';
+            fileSelectionInfo.style.color = '#0072ce';
         } else {
-            fileSelectionInfo.style.color = '#666';
+            fileSelectionInfo.textContent = `선택된 파일: ${count}개 · 선택한 파일을 우선적으로 참고해 답변드려요.`;
+            fileSelectionInfo.style.color = '#28a745';
         }
     }
 
@@ -610,20 +1039,38 @@
     uploadForm.addEventListener('submit', async (e) => {
         e.preventDefault();
         if (fileInput.files.length === 0) return;
+
+        const file = fileInput.files[0];
+        const fileName = file.name || '';
+        const lowerName = fileName.toLowerCase();
+
+        // PDF가 아니면 업로드를 막고, 사용자가 직접 PDF로 변환하도록 안내
+        if (!lowerName.endsWith('.pdf')) {
+            alert('현재 시스템은 PDF 파일만 업로드하여 분석합니다.\n\n선택하신 파일 형식은 "' +
+                fileName +
+                '" 입니다.\n\n해당 문서를 먼저 PDF로 변환한 뒤 다시 업로드해 주세요.');
+            return;
+        }
+
         const formData = new FormData();
-        formData.append('file', fileInput.files[0]); // 첫 번째 파일만 처리
+        formData.append('file', file); // 첫 번째 파일만 처리
         const uploadCategory = document.getElementById('uploadCategory').value;
         formData.append('category', uploadCategory);
 
         try {
             const response = await fetch('/upload', { method: 'POST', body: formData });
+            if (response.status === 401) {
+                alert('로그인 세션이 만료되었습니다.\n다시 로그인해주세요.');
+                window.location.href = '/loginPage';
+                return;
+            }
             const result = await response.json();
 
             alert(result.message);
             if (result.status === "success") {
                 categorySelect.value = uploadCategory; // 업로드한 분야로 전환
                 closeUploadModal();
-                loadFiles(); // 성공 시 목록 새로고침 (RAG에 바로 반영)
+                loadFiles(); // 성공 시 목록 새로고침
             }
         } catch (err) {
             alert("업로드 중 오류 발생: " + err.message);
@@ -631,22 +1078,70 @@
     });
 
     // 3. 파일 삭제 처리
+    // async function deleteFile(filename) {
+    //     if (!confirm(`'${filename}'을(를) 정말 삭제하시겠습니까?`)) return;
+
+    //     try {
+    //         const currentCategory = categorySelect.value;
+    //         const response = await fetch(`/files/delete?filename=${encodeURIComponent(filename)}&category=${encodeURIComponent(currentCategory)}`);
+    //         const result = await response.text();
+    //         alert(result);
+    //         if (result.startsWith("삭제 성공")) {
+    //             // 삭제된 파일이 선택 목록에 있으면 제거
+    //             selectedFiles.delete(filename);
+    //             loadFiles(); // 성공 시 목록 새로고침 (RAG에 바로 반영)
+    //         }
+    //     } catch (err) {
+    //         alert("삭제 중 오류 발생: " + err.message);
+    //     }
+    // }
+
+    // 3. 파일 삭제 처리_0223 수정(김소연) delete 메서드 변경(보안 기준)에 따른 프론트 코드 수정
     async function deleteFile(filename) {
         if (!confirm(`'${filename}'을(를) 정말 삭제하시겠습니까?`)) return;
 
         try {
             const currentCategory = categorySelect.value;
-            const response = await fetch(`/files/delete?filename=${encodeURIComponent(filename)}&category=${encodeURIComponent(currentCategory)}`);
+
+            const response = await fetch('/api/files', {
+                method: 'DELETE',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ filename, category: currentCategory }),
+                credentials: 'include'
+            });
+
+            if (response.status === 401) {
+                alert('로그인 세션이 만료되었습니다.\n다시 로그인해주세요.');
+                window.location.href = '/loginPage';
+                return;
+            }
             const result = await response.text();
             alert(result);
+
             if (result.startsWith("삭제 성공")) {
-                // 삭제된 파일이 선택 목록에 있으면 제거
                 selectedFiles.delete(filename);
-                loadFiles(); // 성공 시 목록 새로고침 (RAG에 바로 반영)
+                loadFiles();
             }
         } catch (err) {
             alert("삭제 중 오류 발생: " + err.message);
         }
+    }
+
+    // 답변 메시지 렌더링: 타이핑 애니메이션 후 마크다운 HTML로 변환
+    function renderAnswerMessage(element, rawAnswer, callback) {
+        // 타이핑 중에는 <br>을 줄바꿈으로 치환해 깔끔하게 표시
+        const textForTyping = rawAnswer.replace(/<br\s*\/?>/gi, '\n');
+        typeMessage(element, textForTyping, () => {
+            // 타이핑 완료 후 마크다운 → HTML 렌더링
+            try {
+                element.classList.add('rendered');
+                // 블록 요소(p 등) 앞에 따로 ":"를 두지 않고, 바로 내용이 시작되도록 렌더링
+                element.innerHTML = marked.parse(rawAnswer);
+            } catch (e) {
+                console.warn('[marked] 파싱 실패, 텍스트 유지:', e);
+            }
+            if (callback) callback();
+        });
     }
 
     // 타이핑 효과로 메시지 표시
@@ -655,7 +1150,7 @@
         if (element.dataset.typingInterval) {
             clearInterval(parseInt(element.dataset.typingInterval));
         }
-        
+
         element.textContent = '';
         let index = 0;
         const typingInterval = setInterval(() => {
@@ -669,14 +1164,42 @@
                 if (callback) callback();
             }
         }, 30); // 30ms마다 한 글자씩
-        
+
         // interval ID를 element에 저장
         element.dataset.typingInterval = typingInterval.toString();
     }
 
-    // 페이지 로드 시 초기 인사 메시지 표시
+    // 문서 초기화 완료될 때까지 폴링 (진행률 표시 갱신, 10초 간격). progressBaseRef 있으면 base만 갱신해 점 애니메이션은 % 뒤에도 유지
+    // 반환: { alreadyReady: boolean } — 처음부터 완료됐으면 true (완료 문구 생략용)
+    async function waitUntilDocumentsReady(loadingText, loadingIntervalId, progressBaseRef) {
+        const pollIntervalMs = 10000;
+        let firstCheck = true;
+        while (true) {
+            const res = await fetch(
+                `/lm/api/ask/cache-check?question=__ready__&category=`,
+                { method: 'POST' }
+            );
+            if (!res.ok) {
+                await new Promise(r => setTimeout(r, pollIntervalMs));
+                continue;
+            }
+            const data = await res.json();
+            if (data.initializing !== true) {
+                return { alreadyReady: firstCheck };
+            }
+            firstCheck = false;
+            if (loadingText && (data.initPhase != null || data.initPercent != null) && progressBaseRef) {
+                const phase = data.initPhase || '준비 중';
+                const pct = data.initPercent != null ? data.initPercent : 0;
+                progressBaseRef.base = '문서를 불러오는 중입니다 (' + phase + ') - ' + pct + '%';
+            }
+            await new Promise(r => setTimeout(r, pollIntervalMs));
+        }
+    }
+
+    // 페이지 로드 시 초기 인사 메시지 표시 (문서 초기화 완료 후에만 호출)
     function showInitialGreeting(selectedCategory) {
-        const greetingMessage = ': 안녕하세요, 저는 법률 및 규정 어시스턴트에요. 관련 분야를 선택하고 질문해 주세요.';
+        const greetingMessage = '안녕하세요, 저는 건설근로자공제회 업무 어시스턴트에요.\n관련 분야를 선택하고 질문해 주세요.';
         const messageDiv = document.createElement('div');
         messageDiv.classList.add('message', 'ai');
         const avatarImg = document.createElement('img');
@@ -692,31 +1215,72 @@
         messageDiv.appendChild(contentDiv);
         chatBox.appendChild(messageDiv);
         typeMessage(textSpan, greetingMessage, () => {
-            // 초기 인사말 타이핑 완료 후, 선택된 분야가 있으면 분야 메시지 표시
             if (selectedCategory) {
                 updateCategoryMessage(selectedCategory);
             }
         });
     }
 
-    // 페이지 로드 시 분야/파일 목록 불러오기 및 초기 인사 메시지 표시
+    // 페이지 로드 시: 문서 불러오기 대기 → 완료 메시지 → 환영 메시지 순서로 표시
     async function initializePage() {
-        // admin 여부에 따라 UI 제어
         if (typeof isAdmin !== 'undefined' && isAdmin) {
-            // admin인 경우 모든 버튼 표시
             document.getElementById('addCategoryBtn').style.display = 'block';
             document.getElementById('uploadButtonArea').style.display = 'block';
         } else {
-            // admin이 아닌 경우 분야 추가, 파일 추가 버튼 숨김
             document.getElementById('addCategoryBtn').style.display = 'none';
             document.getElementById('uploadButtonArea').style.display = 'none';
         }
-        
+
         await loadCategories();
         const selectedCategory = categorySelect.value;
+
+        // 문서 초기화 중에는 분야 선택·질문 입력·전송 비활성화
+        categorySelect.disabled = true;
+        userInput.disabled = true;
+        sendBtn.disabled = true;
+
+        // 1) 먼저 "문서를 불러오는 중입니다..." 로딩 말풍선 표시 (질문할 때와 동일한 스타일)
+        const loadingDiv = document.createElement('div');
+        loadingDiv.classList.add('message', 'ai', 'loading');
+        const loadingAvatar = document.createElement('img');
+        loadingAvatar.src = '/images/Cw_ci.png';
+        loadingAvatar.alt = 'AI';
+        loadingAvatar.classList.add('ai-avatar');
+        loadingAvatar.onerror = function() { this.style.display = 'none'; };
+        const loadingContent = document.createElement('div');
+        loadingContent.classList.add('message-content');
+        const loadingText = document.createElement('span');
+        loadingText.textContent = '문서를 불러오는 중입니다';
+        loadingContent.appendChild(loadingText);
+        loadingDiv.appendChild(loadingAvatar);
+        loadingDiv.appendChild(loadingContent);
+        chatBox.appendChild(loadingDiv);
+        chatBox.scrollTop = chatBox.scrollHeight;
+        const progressBaseRef = { base: '문서를 불러오는 중입니다' };
+        const loadingIntervalId = startDotAnimation(loadingText, progressBaseRef);
+
+        // 2) 문서 초기화 완료될 때까지 폴링 (응답에 진행 단계·퍼센트 있으면 base만 갱신 → % 뒤에도 ... 유지)
+        const { alreadyReady } = await waitUntilDocumentsReady(loadingText, loadingIntervalId, progressBaseRef);
+
+        clearInterval(loadingIntervalId);
+        // 문서 초기화 완료 → 분야 선택·질문 입력·전송 활성화
+        categorySelect.disabled = false;
+        userInput.disabled = false;
+        sendBtn.disabled = false;
+
+        if (alreadyReady) {
+            // 처음부터 완료된 경우: 완료 문구 없이 로딩 말풍선 제거 후 바로 환영 메시지
+            loadingDiv.remove();
+        } else {
+            // 대기한 경우: 같은 칸에 완료 문구 표시 후 환영 메시지
+            loadingText.textContent = '문서 초기화가 완료되었어요. 이제 질문을 시작해주세요!';
+        }
+        chatBox.scrollTop = chatBox.scrollHeight;
+
+        // 3) 환영 메시지 말풍선 두 개 추가 (안녕하세요... / 현재 선택된 분야...)
         showInitialGreeting(selectedCategory);
     }
-    
+
     initializePage();
 
     // 로그아웃 버튼 클릭 이벤트
@@ -764,12 +1328,12 @@
 
     // 분야 선택 메시지 업데이트 함수
     function updateCategoryMessage(selectedCategory) {
-        const message = `: 현재 선택된 분야는 "${selectedCategory}"입니다. 이 분야에 대한 질문을 해주세요.`;
-        
+        const message = `현재 선택된 분야는 "${selectedCategory}"입니다. 이 분야에 대한 질문을 해주세요.\n오른쪽 파일 관리 탭에서 관련 파일을 선택하면 더 빠르고 정확한 답변을 받을 수 있습니다.\n선택하지 않으면 전체 파일을 참고하여 답변드려요.`;
+
         // 모든 분야 선택 메시지 찾기 (마지막 것을 찾기 위해)
         const allCategoryMessages = chatBox.querySelectorAll('.category-selection-message');
         const existingMessageDiv = allCategoryMessages.length > 0 ? allCategoryMessages[allCategoryMessages.length - 1] : null;
-        
+
         if (existingMessageDiv) {
             // 기존 메시지 다음에 사용자 메시지나 AI 답변이 있는지 확인
             let hasSubsequentMessages = false;
@@ -777,7 +1341,7 @@
             while (nextSibling) {
                 if (nextSibling.classList.contains('message')) {
                     // 사용자 메시지이거나, 분야 선택 메시지가 아닌 AI 메시지인 경우
-                    if (nextSibling.classList.contains('user') || 
+                    if (nextSibling.classList.contains('user') ||
                         (nextSibling.classList.contains('ai') && !nextSibling.classList.contains('category-selection-message'))) {
                         hasSubsequentMessages = true;
                         break;
@@ -785,7 +1349,7 @@
                 }
                 nextSibling = nextSibling.nextElementSibling;
             }
-            
+
             if (hasSubsequentMessages) {
                 // 사용자 메시지나 AI 답변이 있으면 새로운 메시지 추가
                 const messageDiv = document.createElement('div');

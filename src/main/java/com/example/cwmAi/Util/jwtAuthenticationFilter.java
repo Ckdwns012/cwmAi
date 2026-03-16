@@ -60,7 +60,7 @@ public class jwtAuthenticationFilter extends OncePerRequestFilter {
 
         //  3) 토큰이 없으면 차단
         if (token == null) {
-            response.sendError(HttpServletResponse.SC_UNAUTHORIZED, "JWT not found");
+            handleUnauthorized(request, response);
             return;
         }
 
@@ -69,10 +69,29 @@ public class jwtAuthenticationFilter extends OncePerRequestFilter {
             String userId = jwtUtil.validateAndGetId(token);
             request.setAttribute("userId", userId);
         } catch (Exception e) {
-            response.sendError(HttpServletResponse.SC_UNAUTHORIZED, "Invalid or expired JWT");
+            handleUnauthorized(request, response);
             return;
         }
 
         filterChain.doFilter(request, response);
+    }
+
+    // 페이지 요청(브라우저 새로고침)이면 loginPage로 리다이렉트,
+    // API 요청(fetch/XHR)이면 401 반환
+    private void handleUnauthorized(HttpServletRequest request, HttpServletResponse response)
+            throws IOException {
+        String accept = request.getHeader("Accept");
+        String requestedWith = request.getHeader("X-Requested-With");
+        String path = request.getRequestURI();
+
+        boolean isApiRequest = path.startsWith("/lm/api/") || path.startsWith("/api/")
+                || "XMLHttpRequest".equals(requestedWith)
+                || (accept != null && accept.contains("application/json") && !accept.contains("text/html"));
+
+        if (isApiRequest) {
+            response.sendError(HttpServletResponse.SC_UNAUTHORIZED, "Invalid or expired JWT");
+        } else {
+            response.sendRedirect("/loginPage");
+        }
     }
 }

@@ -27,6 +27,17 @@ public class chunkDTO {
     /** 카테고리 (예: "공제사업", "개인정보보호") */
     private final String category;
 
+    // 0226 김소연(수정): 벡터 검색용 임베딩 (기동 시 계산, final 아님)
+    // 이유: 1단계 LLM에 전체 조항 목록 전달 → 벡터+키워드 top-50 필터링으로 교체
+    private float[] embedding;
+    public float[] getEmbedding() { return embedding; }
+    public void setEmbedding(float[] embedding) { this.embedding = embedding; }
+
+    /** 청크 유형: "LAW"(법령·조항) | "MANUAL"(업무매뉴얼), null이면 "LAW"로 간주 */
+    private String chunkType;
+    public String getChunkType() { return chunkType; }
+    public void setChunkType(String chunkType) { this.chunkType = chunkType; }
+
     public chunkDTO(
             String lawName,
             String chapterTitle,
@@ -49,4 +60,3 @@ public class chunkDTO {
         this.category = category;
     }
 }
-

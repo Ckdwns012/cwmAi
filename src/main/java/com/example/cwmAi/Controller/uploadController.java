@@ -1,10 +1,11 @@
 package com.example.cwmAi.Controller;
 
+import com.example.cwmAi.Util.SecurityPathUtil;
+import com.example.cwmAi.dto.FileDeleteRequest;
+import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.core.io.Resource;
-import org.springframework.core.io.ResourceLoader;
 import org.springframework.core.io.UrlResource;
-import org.springframework.core.io.support.ResourcePatternResolver;
 import org.springframework.http.ContentDisposition;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.ResponseEntity;
@@ -16,20 +17,16 @@ import org.springframework.web.multipart.MultipartFile;
 
 import com.example.cwmAi.Service.aiService;
 
-import jakarta.annotation.PostConstruct;
 import java.io.File;
 import java.io.IOException;
-import java.io.InputStream;
+import java.net.URI;
 import java.net.MalformedURLException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
-import java.util.Arrays;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Set;
+import java.util.*;
 import java.util.stream.Collectors;
 
 // 응답을 위한 간단한 DTO 클래스 (UploadResponse.java 파일로 별도 생성 권장)
@@ -46,130 +43,51 @@ class UploadResponse {
 public class uploadController {
     @Autowired
     private aiService aiService;
-    
-    @Autowired
-    private ResourceLoader resourceLoader;
-    
-    // JAR 파일 실행 위치 기준 상대 경로 (uploads 폴더)
+
     private static final String UPLOAD_DIR;
     private static final String FILE_DIR;
-    
+    private static final String FORMAT_DIR;
     static {
-        // 상대 경로를 절대 경로로 변환 (JAR 실행 위치 기준)
-        UPLOAD_DIR = new File("uploads").getAbsolutePath();
-        FILE_DIR = UPLOAD_DIR;
-        // uploads 폴더가 없으면 생성
-        File uploadDir = new File(UPLOAD_DIR);
-        if (!uploadDir.exists()) {
-            uploadDir.mkdirs();
+        File baseDir;
+        try {
+            URI location = uploadController.class.getProtectionDomain().getCodeSource().getLocation().toURI();
+            Path path = Paths.get(location);
+            // JAR로 실행 시: path가 jar 파일 → 그 부모 디렉터리를 기준으로 uploads/format 사용
+            if (Files.isRegularFile(path)) {
+                baseDir = path.getParent().toFile();
+            } else {
+                // IDE 등에서 실행 시: user.dir(프로젝트 루트) 기준
+                baseDir = new File(System.getProperty("user.dir"));
+            }
+        } catch (Exception e) {
+            baseDir = new File(System.getProperty("user.dir"));
         }
+        UPLOAD_DIR = new File(baseDir, "uploads").getAbsolutePath();
+        FILE_DIR   = UPLOAD_DIR;
+        FORMAT_DIR = new File(baseDir, "format").getAbsolutePath();
+        if (!new File(UPLOAD_DIR).exists()) new File(UPLOAD_DIR).mkdirs();
+        if (!new File(FORMAT_DIR).exists()) new File(FORMAT_DIR).mkdirs();
     }
     private static final List<String> DEFAULT_CATEGORIES = List.of(
-            "계약",
-            "개인정보보호",
-            "정보보안",
-            "정보화사업",
-            "공제사업"
+            "경영전략", "고객복지", "정보화", "퇴직공제", "회계총무"
     );
 
     /**
-     * JAR 내부의 uploads 리소스를 외부 uploads 폴더로 복사
-     * 애플리케이션 시작 시 한 번만 실행
+     * JAR와 같은 디렉터리의 uploads, format 폴더만 사용합니다.
+     * 배포 시 해당 폴더를 JAR 옆에 두고 파일을 넣으면 됩니다. (JAR 내부 복사 없음)
      */
-    @PostConstruct
-    public void copyUploadsFromJar() {
-        try {
-            // ResourceLoader가 ResourcePatternResolver를 구현하는지 확인
-            ResourcePatternResolver resolver = resourceLoader instanceof ResourcePatternResolver 
-                ? (ResourcePatternResolver) resourceLoader
-                : new org.springframework.core.io.support.PathMatchingResourcePatternResolver(resourceLoader);
-            
-            // JAR 내부의 uploads 폴더의 모든 파일 찾기
-            Resource[] resources = resolver.getResources("classpath:uploads/**");
-            
-            if (resources.length == 0) {
-                // JAR 내부에 uploads 폴더가 없으면 (개발 환경 등) 그냥 리턴
-                return;
-            }
-            
-            // JAR 환경인지 확인 (개발 환경에서는 파일 시스템 경로를 사용하므로 복사하지 않음)
-            boolean isJarEnvironment = false;
-            for (Resource resource : resources) {
-                try {
-                    String uri = resource.getURI().toString();
-                    if (uri.startsWith("jar:")) {
-                        isJarEnvironment = true;
-                        break;
-                    }
-                } catch (Exception e) {
-                    // URI를 가져올 수 없으면 건너뛰기
-                    continue;
-                }
-            }
-            
-            // JAR 환경이 아니면 (로컬 개발 환경) 복사하지 않음
-            if (!isJarEnvironment) {
-                return;
-            }
-            
-            int copiedCount = 0;
-            for (Resource resource : resources) {
-                if (!resource.isReadable() || resource.getFilename() == null) {
-                    continue;
-                }
-                
-                String resourcePath = resource.getURI().toString();
-                // classpath:uploads/... 또는 jar:file:.../uploads/... 형태
-                String relativePath = resourcePath.contains("uploads/") 
-                    ? resourcePath.substring(resourcePath.indexOf("uploads/") + 8) 
-                    : resource.getFilename();
-                
-                // 디렉토리는 건너뛰기 (파일만 복사)
-                if (relativePath.endsWith("/")) {
-                    continue;
-                }
-                
-                // 외부 파일 경로 생성
-                File destFile = new File(UPLOAD_DIR, relativePath);
-                
-                // 기존 파일이 있으면 건너뛰기 (덮어쓰지 않음)
-                if (destFile.exists()) {
-                    continue;
-                }
-                
-                // 디렉토리 생성
-                destFile.getParentFile().mkdirs();
-                
-                // 파일 복사
-                try (InputStream inputStream = resource.getInputStream()) {
-                    Files.copy(inputStream, destFile.toPath(), StandardCopyOption.REPLACE_EXISTING);
-                    copiedCount++;
-                }
-            }
-            
-            if (copiedCount > 0) {
-                System.out.println("JAR 내부에서 " + copiedCount + "개의 파일을 외부 uploads 폴더로 복사했습니다.");
-            }
-        } catch (Exception e) {
-            // JAR 내부에 uploads가 없거나 복사 실패 시 오류 무시 (정상적인 경우일 수 있음)
-            System.out.println("JAR 내부의 uploads 폴더를 외부로 복사하는 중 오류 발생 (무시됨): " + e.getMessage());
-        }
-    }
-
     @RequestMapping("uploadPage")
     public String uploadPage(){
-        return "uploadPage"; // uploadPage.html 뷰 반환
+        return "uploadPage";
     }
 
-    // JSON 응답을 위해 @ResponseBody 추가, 반환 타입 UploadResponse로 변경
     @PostMapping("/upload")
     @ResponseBody
     public UploadResponse uploadFile(
             @RequestParam("file") MultipartFile file,
             @RequestParam("category") String category,
-            jakarta.servlet.http.HttpServletRequest request
+            HttpServletRequest request
     ) {
-        // admin 체크
         String userId = (String) request.getAttribute("userId");
         if (userId == null || !"admin".equals(userId)) {
             return new UploadResponse("error", "권한이 없습니다. 관리자만 파일을 업로드할 수 있습니다.");
@@ -177,19 +95,42 @@ public class uploadController {
         if (file.isEmpty()) {
             return new UploadResponse("error", "업로드할 파일이 없습니다.");
         }
+
         try {
-            // 카테고리별 폴더 없으면 생성
+            // category 검증
+            SecurityPathUtil.validateSafeCategory(category);
+
+            String filename = StringUtils.cleanPath(Objects.requireNonNull(file.getOriginalFilename()));
+            SecurityPathUtil.validateSafeFilename(filename);
+
+            // 확장자 화이트리스트 체크 (업로드에도 적용!)
+            if (!hasAllowedExtension(filename)) {
+                return new UploadResponse("error", "허용되지 않은 파일 확장자입니다.");
+            }
+
             File uploadDir = (category == null || category.isBlank())
                     ? new File(UPLOAD_DIR)
                     : new File(UPLOAD_DIR, category);
+
             if (!uploadDir.exists()) uploadDir.mkdirs();
 
-            String filename = StringUtils.cleanPath(file.getOriginalFilename());
-            File dest = Paths.get(uploadDir.getPath(), filename).toFile();
-            file.transferTo(dest);
-            // 업로드 완료 후 메모리 저장소를 최신 상태로 갱신
-            aiService.reloadCategory(category);
-            return new UploadResponse("success", "파일 업로드 성공: " + filename);
+            Path basePath = uploadDir.toPath().toAbsolutePath().normalize();
+            Path destPath = SecurityPathUtil.safeResolve(basePath, filename);
+
+            // 덮어쓰기 정책: 기본은 "거부"
+            if (Files.exists(destPath)) {
+                return new UploadResponse("error", "같은 파일명이 이미 존재합니다. 파일명을 변경해 업로드해주세요.");
+            }
+
+            Files.copy(file.getInputStream(), destPath, StandardCopyOption.REPLACE_EXISTING);
+
+            // 비동기 재로딩: 파일 저장 후 즉시 응답, 백그라운드에서 파싱+임베딩 처리
+            aiService.reloadCategoryAsync(category);
+
+            return new UploadResponse("success",
+                    "파일 저장 완료: " + filename + "\n백그라운드에서 분석 중입니다. 잠시 후 검색에 반영됩니다.");
+        } catch (IllegalArgumentException e) {
+            return new UploadResponse("error", "요청 값이 올바르지 않습니다: " + e.getMessage());
         } catch (IOException e) {
             e.printStackTrace();
             return new UploadResponse("error", "파일 업로드 실패: " + e.getMessage());
@@ -200,22 +141,10 @@ public class uploadController {
     @GetMapping("/files")
     public String listFiles(Model model) {
         File folder = new File(UPLOAD_DIR);
-
-        // 파일 필터링: 숨김파일 제외, 파일만 표시
         String[] files = folder.list((dir, name) -> {
-            // 숨김 파일 제외
             if (name.startsWith(".")) return false;
-
-            // 확장자 필터링(원하면 추가)
-            String lower = name.toLowerCase();
-            return lower.endsWith(".pdf") ||
-                    lower.endsWith(".txt") ||
-                    lower.endsWith(".hwp") ||
-                    lower.endsWith(".jpg") ||
-                    lower.endsWith(".png") ||
-                    lower.endsWith(".jpeg");
+            return hasAllowedExtension(name);
         });
-
         model.addAttribute("files", files);
         return "fileListPage";
     }
@@ -293,9 +222,15 @@ public class uploadController {
     @ResponseBody // JSON 반환
     public List<String> apiListFiles(@RequestParam(value = "category", required = false) String category) {
         // 카테고리별 디렉터리가 없으면 빈 리스트 반환 (오류 대신 안전하게 처리)
-        File folder = (category == null || category.isBlank())
-                ? new File(FILE_DIR)
-                : new File(FILE_DIR, category);
+        File folder;
+        if (category == null || category.isBlank()) {
+            folder = new File(FILE_DIR);
+        } else if ("format".equals(category)) {
+            // 양식 전용 카테고리는 uploads가 아닌 별도 format 폴더에서 조회
+            folder = new File(FORMAT_DIR);
+        } else {
+            folder = new File(FILE_DIR, category);
+        }
 
         if (!folder.exists()) {
             return List.of();
@@ -317,33 +252,54 @@ public class uploadController {
                 .collect(Collectors.toList());
     }
 
-
-    @GetMapping("/files/delete")
+    /**
+     * 삭제: GET -> DELETE로 변경
+     */
+    @DeleteMapping("/api/files")
     @ResponseBody
     public String deleteFile(
-            @RequestParam String filename,
-            @RequestParam("category") String category,
-            jakarta.servlet.http.HttpServletRequest request
+            @RequestBody FileDeleteRequest req,
+            HttpServletRequest request
     ) {
-        // admin 체크
         String userId = (String) request.getAttribute("userId");
         if (userId == null || !"admin".equals(userId)) {
             return "권한이 없습니다. 관리자만 파일을 삭제할 수 있습니다.";
         }
-        File baseDir = (category == null || category.isBlank())
-                ? new File(FILE_DIR)
-                : new File(FILE_DIR, category);
-        File file = new File(baseDir, filename);
-        if (file.exists() && file.isFile()) {
-            if (file.delete()) {
-                // 파일 삭제 후 메모리 저장소를 최신 상태로 갱신
-                aiService.reloadCategory(category);
-                return "삭제 성공: " + filename;
-            } else {
-                return "삭제 실패: " + filename;
+
+        if (req == null || req.getFilename() == null) {
+            return "삭제 실패: filename이 없습니다.";
+        }
+
+        String filename = req.getFilename();
+        String category = req.getCategory();
+
+        try {
+            SecurityPathUtil.validateSafeCategory(category);
+            SecurityPathUtil.validateSafeFilename(filename);
+
+            Path basePath = (category == null || category.isBlank())
+                    ? Paths.get(FILE_DIR)
+                    : Paths.get(FILE_DIR, category);
+
+            Path targetPath = SecurityPathUtil.safeResolve(basePath, filename);
+
+            if (!Files.exists(targetPath) || !Files.isRegularFile(targetPath)) {
+                return "파일이 존재하지 않습니다: " + filename;
             }
-        } else {
-            return "파일이 존재하지 않습니다: " + filename;
+
+            Files.delete(targetPath);
+
+            // 해당 파일을 참조한 캐시 항목 먼저 제거 (카테고리 전체 삭제보다 정밀)
+            aiService.invalidateCacheByFile(filename, category);
+            // 비동기 재로딩
+            aiService.reloadCategoryAsync(category);
+            return "삭제 성공: " + filename;
+
+        } catch (IllegalArgumentException e) {
+            return "삭제 실패: 요청 값이 올바르지 않습니다.";
+        } catch (IOException e) {
+            e.printStackTrace();
+            return "삭제 실패: " + e.getMessage();
         }
     }
 
@@ -353,9 +309,15 @@ public class uploadController {
             @RequestParam(value = "category", required = false) String category
     ) {
         try {
-            Path basePath = (category == null || category.isBlank())
-                    ? Paths.get(UPLOAD_DIR)
-                    : Paths.get(UPLOAD_DIR, category);
+            Path basePath;
+            if (category == null || category.isBlank()) {
+                basePath = Paths.get(UPLOAD_DIR);
+            } else if ("format".equals(category)) {
+                // 양식 파일은 프로젝트 루트의 format 폴더에서 다운로드
+                basePath = Paths.get(FORMAT_DIR);
+            } else {
+                basePath = Paths.get(UPLOAD_DIR, category);
+            }
             Path filePath = basePath.resolve(filename).normalize();
             Resource resource = new UrlResource(filePath.toUri());
 
@@ -386,11 +348,13 @@ public class uploadController {
     // 업로드 및 조회 시 허용할 파일 확장자 체크
     private boolean hasAllowedExtension(String name) {
         String lower = name.toLowerCase();
-        return lower.endsWith(".pdf") ||
-                lower.endsWith(".txt") ||
-                lower.endsWith(".hwp") ||
-                lower.endsWith(".jpg") ||
-                lower.endsWith(".png") ||
-                lower.endsWith(".jpeg");
+        // 현재 PDF만 파싱 지원. 추후 다른 확장자 파싱 기능 추가 시 아래 주석 해제
+        return lower.endsWith(".pdf");
+        // return lower.endsWith(".pdf") ||
+        //         lower.endsWith(".txt") ||
+        //         lower.endsWith(".hwp") ||
+        //         lower.endsWith(".jpg") ||
+        //         lower.endsWith(".png") ||
+        //         lower.endsWith(".jpeg");
     }
 }

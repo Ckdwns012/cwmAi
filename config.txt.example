@@ -1,0 +1,11 @@
+# JAR와 같은 디렉터리에 config.txt 로 두고 사용하세요.
+# config.txt가 없으면: 로컬 스토리지(인메모리) 로그인 + 로컬 Ollama 사용.
+# config.txt가 있으면: 아래 변수를 읽어 DB 로그인 + 지정한 Ollama 호스트 사용.
+
+# --- Database Connection Settings ---
+DB_URL=jdbc:sqlserver://localhost:1433;databaseName=your_db_name;
+DB_USERNAME=sa
+DB_PASSWORD=your_strong_password
+
+# --- Ollama API Settings ---
+OLLAMA_HOST=http://localhost:11434

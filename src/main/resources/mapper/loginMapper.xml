@@ -22,4 +22,12 @@
         WHERE id = #{id}
     </select>
 
+    <!-- 최근 로그인 시각·IP 갱신 -->
+    <update id="updateLastLogin">
+        UPDATE member
+        SET last_login_time = #{lastLoginTime},
+            last_login_ip = #{lastLoginIp}
+        WHERE id = #{id}
+    </update>
+
 </mapper>

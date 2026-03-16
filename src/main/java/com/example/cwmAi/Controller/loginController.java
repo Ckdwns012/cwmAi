@@ -1,8 +1,11 @@
 package com.example.cwmAi.Controller;
 
 import jakarta.servlet.http.Cookie;
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.ResponseCookie;
 import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
 import org.springframework.web.bind.annotation.ModelAttribute;
@@ -25,18 +28,19 @@ public class loginController {
         return "loginPage";
     }
     @RequestMapping("login")
-    public String login(@ModelAttribute loginDTO loginDTO, Model model, HttpServletResponse response){
-        String token = loginService.login(loginDTO);
+    public String login(@ModelAttribute loginDTO loginDTO, Model model, HttpServletRequest request, HttpServletResponse response){
+        String clientIp = getClientIp(request);
+        String token = loginService.login(loginDTO, clientIp);
 
         if (token != null) {
             Cookie cookie = new Cookie("accessToken", token);
             cookie.setHttpOnly(true); // XSS 방지
             cookie.setPath("/");
             response.addCookie(cookie);
-            model.addAttribute("message","sign in success");
             return "redirect:/aiChatPage";
         }else{
-            model.addAttribute("message","login fail");
+            model.addAttribute("message","아이디 또는 비밀번호가 올바르지 않습니다.");
+            model.addAttribute("loginDTO", loginDTO);
             return "loginPage";
         }
     }
@@ -55,10 +59,9 @@ public class loginController {
             cookie.setHttpOnly(true); // XSS 방지
             cookie.setPath("/");
             response.addCookie(cookie);
-            model.addAttribute("message","sign in success");
             return "redirect:/aiChatPage";
         }else{
-            model.addAttribute("message","sign in fail");
+            model.addAttribute("message","이미 사용 중인 아이디입니다.");
             return "signUpPage";
         }
     }
@@ -86,5 +89,40 @@ public class loginController {
         cookie.setMaxAge(0); // 쿠키 만료
         response.addCookie(cookie);
         return "redirect:/loginPage";
+    }
+
+    private void setAccessTokenCookie(HttpServletResponse response, String token) {
+        // 내부망이어도 HTTPS면 secure=true 권장
+        boolean secure = false; // HTTPS 적용 시 true로 바꿔야함.
+
+        ResponseCookie cookie = ResponseCookie.from("accessToken", token)
+                .httpOnly(true)
+                .secure(secure)
+                .path("/")
+                .sameSite("Lax")
+                .maxAge(60 * 60) // 1시간
+                .build();
+
+        response.addHeader(HttpHeaders.SET_COOKIE, cookie.toString());
+    }
+
+    private String getClientIp(HttpServletRequest request) {
+        String xff = request.getHeader("X-Forwarded-For");
+        if (xff != null && !xff.isBlank()) return xff.split(",")[0].trim();
+        return request.getRemoteAddr() != null ? request.getRemoteAddr() : "";
+    }
+
+    private void clearAccessTokenCookie(HttpServletResponse response) {
+        boolean secure = false; // HTTPS 적용 시 true로 바꾸세요.
+
+        ResponseCookie cookie = ResponseCookie.from("accessToken", "")
+                .httpOnly(true)
+                .secure(secure)
+                .path("/")
+                .sameSite("Lax")
+                .maxAge(0)
+                .build();
+
+        response.addHeader(HttpHeaders.SET_COOKIE, cookie.toString());
     }
 }
