@@ -27,10 +27,6 @@ public class DocumentChunker {
      * - 항(項) 패턴도 고려
      */
     public List<chunkDTO> chunkText(String fileName, String text, String category) {
-        System.out.println("=== 청킹 시작: " + fileName + " ===");
-        System.out.println("카테고리: " + (category != null ? category : "없음"));
-        System.out.println("원본 텍스트 길이: " + text.length() + "자");
-
         List<chunkDTO> chunks = new ArrayList<>();
 
         /* =========================
@@ -41,7 +37,6 @@ public class DocumentChunker {
         boolean isManual = "알 수 없음".equals(rawLawName);
         String lawName = isManual ? fileName.replaceAll("\\.[^.]+$", "").trim() : rawLawName;
         String chunkType = isManual ? "MANUAL" : "LAW";
-        System.out.println("추출된 법령명: " + lawName + " (유형: " + chunkType + ")");
 
         /* =========================
            1. 장 제목 추출 (번호 제거)
@@ -57,7 +52,7 @@ public class DocumentChunker {
             chapterPositions.add(chapterMatcher.start());
             chapterTitles.add(chapterMatcher.group(1).trim());
         }
-        System.out.println("발견된 장(章) 수: " + chapterPositions.size());
+        // 장 수
 
         /* =========================
            2. 조 제목 추출 (개선)
@@ -112,7 +107,7 @@ public class DocumentChunker {
             }
         }
 
-        System.out.println("발견된 조항 수: " + articlePositions.size());
+        // 발견된 조항 수
 
         if (articlePositions.isEmpty() || isManual) {
             // MANUAL 문서는 조항 패턴 오인식 방지를 위해 무조건 목차/fallback 청킹 사용
@@ -120,16 +115,13 @@ public class DocumentChunker {
             List<chunkDTO> tocChunks = chunkByTableOfContents(fileName, text, category, lawName);
             if (!tocChunks.isEmpty()) {
                 tocChunks.forEach(c -> c.setChunkType(chunkType));
-                System.out.println("[청킹] 목차 청크 " + tocChunks.size() + "개 추가 (유형: " + chunkType + ")");
                 chunks.addAll(tocChunks);
             }
             // fallback: 목차도 없으면 줄 단위 문단 청킹
             if (chunks.isEmpty()) {
                 List<chunkDTO> fallbackChunks = chunkByParagraph(fileName, text, category, lawName, chunkType);
-                System.out.println("[fallback 문단청킹] " + fallbackChunks.size() + "개 청크 추가");
                 chunks.addAll(fallbackChunks);
             }
-            System.out.println("=== 청킹 완료: 총 " + chunks.size() + "개 청크(목차/fallback 전용) ===");
             return chunks;
         }
 
@@ -169,23 +161,15 @@ public class DocumentChunker {
             );
 
             if (!validationErrors.isEmpty()) {
-                System.err.println("=== 청크 생성 실패: 필수 필드 누락 ===");
-                System.err.println("파일명: " + fileName);
-                System.err.println("청크 인덱스: " + i);
-                System.err.println("오류 목록:");
                 for (String error : validationErrors) {
-                    System.err.println("  - " + error);
+                    // skip log
                 }
-                System.err.println("조항 내용 (처음 200자): " +
-                        (articleText.length() > 200 ? articleText.substring(0, 200) + "..." : articleText));
-                System.err.println("=====================================");
                 continue; // 필수 필드가 없으면 청크를 생성하지 않음
             }
 
             // 조항 이름이 비어있으면 조항 번호를 기본값으로 사용
             if (articleTitle == null || articleTitle.trim().isEmpty()) {
                 articleTitle = articleNumber;
-                System.out.println("[경고] 조항 이름이 없어 조항 번호를 사용: " + fileName + " - " + articleNumber);
             }
 
             chunkDTO dto = new chunkDTO(
@@ -201,14 +185,8 @@ public class DocumentChunker {
             );
             dto.setChunkType(chunkType);
             chunks.add(dto);
-
-            // 생성된 청크 정보 로그 (디버깅용)
-            System.out.println("[청크 생성 성공 #" + (i + 1) + "] " + articleNumber +
-                    " - " + articleTitle + " (길이: " + articleText.length() + "자)");
         }
 
-        System.out.println("=== 청킹 완료: 총 " + chunks.size() + "개 청크 생성 ===");
-        System.out.println();
         return chunks;
     }
 
@@ -426,7 +404,7 @@ public class DocumentChunker {
             titles.add(title);
         }
 
-        System.out.println("[목차청킹] 발견된 목차 항목 수: " + positions.size());
+        // 목차 항목 수
         if (positions.isEmpty()) return chunks;
 
         for (int i = 0; i < positions.size(); i++) {
@@ -441,8 +419,6 @@ public class DocumentChunker {
                     sectionText, null, fileName, i, category
             );
             chunks.add(dto);
-            System.out.println("[목차청크 #" + (i+1) + "] " + numbers.get(i)
-                    + " - " + titles.get(i) + " (" + sectionText.length() + "자)");
         }
         return chunks;
     }

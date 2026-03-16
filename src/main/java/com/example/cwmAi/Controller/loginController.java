@@ -1,6 +1,7 @@
 package com.example.cwmAi.Controller;
 
 import jakarta.servlet.http.Cookie;
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpHeaders;
@@ -27,8 +28,9 @@ public class loginController {
         return "loginPage";
     }
     @RequestMapping("login")
-    public String login(@ModelAttribute loginDTO loginDTO, Model model, HttpServletResponse response){
-        String token = loginService.login(loginDTO);
+    public String login(@ModelAttribute loginDTO loginDTO, Model model, HttpServletRequest request, HttpServletResponse response){
+        String clientIp = getClientIp(request);
+        String token = loginService.login(loginDTO, clientIp);
 
         if (token != null) {
             Cookie cookie = new Cookie("accessToken", token);
@@ -102,6 +104,12 @@ public class loginController {
                 .build();
 
         response.addHeader(HttpHeaders.SET_COOKIE, cookie.toString());
+    }
+
+    private String getClientIp(HttpServletRequest request) {
+        String xff = request.getHeader("X-Forwarded-For");
+        if (xff != null && !xff.isBlank()) return xff.split(",")[0].trim();
+        return request.getRemoteAddr() != null ? request.getRemoteAddr() : "";
     }
 
     private void clearAccessTokenCookie(HttpServletResponse response) {
