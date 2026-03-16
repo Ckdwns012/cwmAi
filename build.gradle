@@ -70,6 +70,9 @@ tasks.named('test') {
 // 이유: tabula/langchain 등 transitive dependency로 slf4j-simple이 들어오면 부팅 시 LoggerContext 충돌 발생
 configurations.configureEach {
 	exclude group: 'org.slf4j', module: 'slf4j-simple'
+	// 0316(수정): mssql-jdbc, mybatis가 commons-logging.jar를 transitive dependency로 끌어오면
+	// spring-jcl과 충돌하여 Windows 환경에서 부팅 시 클래스 로딩 데드락 발생 → 명시적 제외
+	exclude group: 'commons-logging', module: 'commons-logging'
 }
 
 // 0223 김소연(수정): Windows(CP949) 환경에서 한글 주석/문자열 컴파일 오류 방지
