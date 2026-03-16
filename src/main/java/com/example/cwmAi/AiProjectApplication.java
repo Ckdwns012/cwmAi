@@ -16,8 +16,10 @@ import java.util.Map;
 public class AiProjectApplication implements ApplicationListener<ApplicationReadyEvent> {
 
 	public static void main(String[] args) {
-		// JAR와 같은 디렉터리(또는 IDE 실행 시 프로젝트 루트)의 config.txt 로드
+		// 현재 작업 디렉터리(user.dir)의 config.txt 로드 (상대 경로)
+		System.out.println("[cwmAi] user.dir = " + System.getProperty("user.dir"));
 		Map<String, String> config = ConfigLoader.load();
+		System.out.println("[cwmAi] loaded config.txt entries = " + config.keySet());
 		for (Map.Entry<String, String> e : config.entrySet()) {
 			System.setProperty(e.getKey(), e.getValue() != null ? e.getValue() : "");
 		}
